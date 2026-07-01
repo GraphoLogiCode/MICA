@@ -1,0 +1,23 @@
+{
+	"schemaVersion": 1,
+	"id": "mica_b0",
+	"version": "${version}",
+	"name": "MICA B0 Capture",
+	"description": "Logs the client-side B0 observation stream (inputs, crosshair, held item, frames) for the MICA project.",
+	"authors": [
+		"MICA"
+	],
+	"license": "CC0-1.0",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"mica.capture.B0CaptureClient"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~1.16",
+		"java": ">=8",
+		"fabric": "*"
+	}
+}

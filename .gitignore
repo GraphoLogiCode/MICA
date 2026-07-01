@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Proof logs are regenerable from raw logs by one command (D0 standard),
+# so the generated artifacts are not tracked — only the directory is.
+proof_logs/*.json
+proof_logs/*.jsonl
+!proof_logs/.gitkeep
+
+# Local capture rig: the downloaded server, its generated world, Node deps, and
+# raw capture output are not tracked. The bot source and ingest code are.
+capture/server/
+capture/raw/*.jsonl
+capture/mineflayer-bot/node_modules/
+node_modules/
+
+# Capture toolchain (downloaded JDK) and Fabric mod build output — large/generated.
+capture/.toolchain/
+capture/mineflayer-bot/static/three.min.js
+capture/fabric-mod/.gradle/
+capture/fabric-mod/build/
+capture/fabric-mod/run/
+
+# Foundation-model weights + vendored VPT repo — re-downloadable (see Implementation Log/B1)
+models/
+vendor/
+# All generated capture output (frames, manifests, evidence2d) — keep the dir, not the data
+capture/raw/*
+!capture/raw/.gitkeep
+# Fabric dev-run + gradle caches
+capture/fabric-mod/run/
+capture/fabric-mod/.gradle/

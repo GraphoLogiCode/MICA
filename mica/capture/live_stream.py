@@ -11,7 +11,10 @@ Wire format (one message): [1 byte type][4-byte big-endian length][payload]
   type 1 = frame  : payload is [4-byte big-endian tick][raw RGBA bytes, row-major]
 A packet that has a frame is held until its frame arrives, then yielded together, so the
 caller always gets a complete moment. Frames may be dropped when the consumer lags (the
-mod keeps only the freshest) — those ticks simply yield without a frame.
+mod keeps only the freshest) — those ticks yield without a frame, never disappear.
+Moments can arrive slightly out of tick order: a frameless packet yields at once while
+an earlier packet is still waiting for its frame, so a live consumer must read the
+tick field rather than assume arrival order.
 """
 from __future__ import annotations
 
@@ -74,8 +77,11 @@ def read_moments(reader) -> Iterator[tuple[dict, bytes | None]]:
                 yield packet, None
             else:
                 waiting[packet["tick"]] = packet
-                if len(waiting) > _MAX_WAITING:        # its frame was dropped; don't leak
-                    waiting.pop(next(iter(waiting)))
+                if len(waiting) > _MAX_WAITING:
+                    # Its frame was dropped by the mod. The symbolic half is still a
+                    # real moment, so hand it over frameless instead of losing it.
+                    stale = waiting.pop(next(iter(waiting)))
+                    yield stale, None
         elif msg_type == 1:
             (tick,) = _TICK.unpack(payload[: _TICK.size])
             packet = waiting.pop(tick, None)

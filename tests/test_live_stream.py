@@ -62,3 +62,13 @@ def test_late_frame_still_matches_its_packet():
     moments = list(read_moments(stream))
     assert [packet["tick"] for packet, _ in moments] == [1, 0]
     assert moments[1][1] == rgba
+
+
+def test_packet_whose_frame_never_arrives_yields_frameless():
+    # Under backpressure the mod drops frames but not packets. When the wait buffer
+    # overflows, the oldest packet must still come out (frameless) — a lagging
+    # consumer may lose pixels, never whole moments.
+    overflow = b"".join(_packet_msg(_packet(t, with_frame=True)) for t in range(18))
+    moments = list(read_moments(io.BytesIO(overflow)))
+    assert [packet["tick"] for packet, _ in moments] == [0, 1]   # 16 still waiting at EOF
+    assert all(frame is None for _, frame in moments)

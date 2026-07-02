@@ -70,10 +70,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 // POV frames: the framebuffer is read on the render thread (one GPU->CPU copy); the
 // downscale, the socket send, and the PNG write all run off it. Captured at 20 fps to
 // match the B0 contract and downscaled to a set width keeping the real aspect ratio (no
-// stretch). Frames are skipped while a menu is open or the status overlay is up. VM
-// options: -Dmica.frameEvery=N (default 1 = 20 fps), -Dmica.frameSize=PX (default 320 =
-// frame width; 320x180 at 16:9 covers both VPT and MineCLIP undistorted), -Dmica.livePort=N
-// (default 25567).
+// stretch). The size floor comes from what the B1 models eat: MineCLIP takes a 256x160
+// picture and VPT a 128x128 one, so a saved frame must never be smaller than 256 wide or
+// 160 tall — shrinking below that would force upscaling later, which invents pixels.
+// (B2 reads no frames at all; it works from block events.) Frames are skipped while a
+// menu is open or the status overlay is up. VM options: -Dmica.frameEvery=N (default 1 =
+// 20 fps), -Dmica.frameSize=PX (default 320 = frame width, floor 256; height follows the
+// window's aspect with a 160 floor), -Dmica.livePort=N (default 25567).
 //
 // The status overlay (F8) shows live capture health and is OFF by default; frame capture
 // pauses while it is on, so it can never reach the saved/streamed frames. Recording
@@ -81,6 +84,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 // the counter, so the recording stays gap-free.
 public class B0CaptureClient implements ClientModInitializer {
     public static final Logger LOGGER = LogManager.getLogger("mica_b0");
+
+    // The smallest frame the B1 pixel models can consume without upscaling:
+    // MineCLIP needs 256x160, VPT needs 128x128. Anything at or above 256 wide
+    // and 160 tall can be shrunk to either model's input without inventing pixels.
+    private static final int MIN_FRAME_WIDTH = 256;
+    private static final int MIN_FRAME_HEIGHT = 160;
 
     private volatile BufferedWriterState state;   // read on the server thread (block events) too
     private volatile LiveStream live;             // read on the frame-writer thread too
@@ -137,7 +146,7 @@ public class B0CaptureClient implements ClientModInitializer {
             st.writer = Files.newBufferedWriter(st.jsonlPath, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             st.frameEvery = Math.max(1, Integer.getInteger("mica.frameEvery", 1));   // 1 = 20 fps (contract)
-            st.frameSize = Math.max(16, Integer.getInteger("mica.frameSize", 320));  // width; 320x180 @16:9 covers VPT 128 + MineCLIP 256x160
+            st.frameSize = Math.max(MIN_FRAME_WIDTH, Integer.getInteger("mica.frameSize", 320));  // frame width; floored so B1's models never upscale
             st.frameWriter = Executors.newSingleThreadExecutor(r -> {
                 Thread th = new Thread(r, "mica-frame-writer");
                 th.setDaemon(true);
@@ -283,8 +292,13 @@ public class B0CaptureClient implements ClientModInitializer {
             state.frameCount++;
             // Downscale to the set width, keeping the real aspect ratio so the saved/
             // streamed frame isn't stretched (VPT/MineCLIP expect undistorted views).
-            int outW = state.frameSize;
-            int outH = Math.max(1, Math.round((float) state.frameSize * fbH / fbW));
+            // A very wide window would make the frame shorter than MineCLIP's input;
+            // in that case grow the whole frame (still aspect-true) instead.
+            // Assigned exactly once so the lambda below can capture them.
+            int scaledH = Math.max(1, Math.round((float) state.frameSize * fbH / fbW));
+            boolean tooShort = scaledH < MIN_FRAME_HEIGHT;
+            int outW = tooShort ? Math.round((float) MIN_FRAME_HEIGHT * fbW / fbH) : state.frameSize;
+            int outH = tooShort ? MIN_FRAME_HEIGHT : scaledH;
             Path out = state.framesDir.resolve(t + ".png");
             state.frameWriter.submit(() -> writeFrame(img, out, outW, outH, t));
             JsonObject f = new JsonObject();
@@ -419,8 +433,12 @@ public class B0CaptureClient implements ClientModInitializer {
         m.addProperty("session_id", st.sessionId);
         m.addProperty("session_start_ms", st.sessionStartMs);
         m.addProperty("mc_version", "1.16.5");
-        m.addProperty("mod_version", "fabric-b0-0.0.1");
+        m.addProperty("mod_version", "fabric-b0-0.0.2");
         m.addProperty("event_schema_version", "1");   // B0 block-event schema version (jsonl_ingest reads this)
+        // The frame settings this recording ran with — two captures with different
+        // settings must be tellable apart from their manifests alone.
+        m.addProperty("frame_every", st.frameEvery);
+        m.addProperty("frame_width_px", st.frameSize);
         m.addProperty("declared_event_count", declaredCount);
         try {
             Files.write(st.manifestPath, m.toString().getBytes(StandardCharsets.UTF_8));

@@ -21,6 +21,10 @@ class SessionManifest:
     mc_version: str = "unknown"
     mod_version: str = "unknown"
     event_schema_version: str = "1"   # the B0 block-event schema this recording was written with
+    # The frame settings the recording ran with (0 = an older recording that didn't say).
+    # Width 256+ and the mod's 160 height floor let both B1 models shrink, never enlarge.
+    frame_every: int = 0
+    frame_width_px: int = 0
 
 
 @dataclass(frozen=True)
@@ -29,8 +33,14 @@ class CapturedSession:
 
     The recorder states the count separately so we can tell if any block change
     went missing — a lost change makes the captured changes fall short of the count.
+
+    A recording whose count was never finalized (the game crashed before the clean
+    stop that writes the real total) is marked provisional. It can still be loaded
+    and inspected, but the missing-change check means nothing for it — the end of
+    the recording may be gone without any way to tell — so the gate rejects it.
     """
 
     manifest: SessionManifest
     packets: tuple[ObservationPacket, ...]
     declared_event_count: int
+    declared_is_provisional: bool = False

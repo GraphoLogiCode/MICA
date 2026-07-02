@@ -40,3 +40,13 @@ def test_square_frames_fail_as_distorted():
 def test_walk_only_fails_for_no_block_events():
     session = _with_frames(generate_session(walk_only_build()), 256, 144)
     assert "block events exercised" in _failed(session)
+
+
+def test_provisional_count_is_hard_rejected():
+    # A crashed recording may have lost its end with no way to tell, so a passing
+    # gate on it would certify completeness it cannot check.
+    session = _with_frames(generate_session(wall_row_build()), 256, 144)
+    crashed = dataclasses.replace(session, declared_is_provisional=True)
+    assert gate_passes(session)
+    assert "manifest finalized (clean stop)" in _failed(crashed)
+    assert not gate_passes(crashed)

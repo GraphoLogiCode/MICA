@@ -19,6 +19,12 @@ def gate_checks(session: CapturedSession) -> list[tuple[str, bool, str]]:
     event_count = sum(len(packet.server.block_events) for packet in session.packets)
 
     checks = [
+        # A provisional count means the recording never closed cleanly (crash) — its
+        # end may be missing with no way to tell, so the completeness check below
+        # would compare the recording against itself. Hard reject.
+        ("manifest finalized (clean stop)", not session.declared_is_provisional,
+         "final event count present" if not session.declared_is_provisional
+         else "count is provisional - recording may be truncated"),
         ("tick contiguity", report.ticks.contiguous, f"{report.ticks.count} ticks"),
         ("alignment bounded", report.alignment.within_bound,
          f"max {report.alignment.max_abs_ms:.0f} ms (singleplayer = one clock)"),

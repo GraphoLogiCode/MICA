@@ -59,3 +59,29 @@ def test_ingested_server_capture_passes_structure_but_flags_client_half(tmp_path
     readers = {result.reader: result for result in report.coverage}
     assert readers["D2 3D structure stream"].satisfied
     assert not readers["D1 2D symbolic half"].satisfied
+
+
+def test_provisional_manifest_loads_but_is_marked(tmp_path):
+    # A crash leaves declared_event_count = -1. The recording must still load (for
+    # inspection), fall back to the observed count, and carry the provisional mark.
+    event = {"event_id": 0, "pos": [1, 64, 0], "block_type": "minecraft:oak_planks", "op": "place", "actor": "Steve"}
+    session = _source(tmp_path, [_moment(0, []), _moment(1, [event])], declared=-1).load()
+    assert session.declared_is_provisional
+    assert session.declared_event_count == 1
+
+    finalized = _source(tmp_path, [_moment(0, []), _moment(1, [event])], declared=1).load()
+    assert not finalized.declared_is_provisional
+
+
+def test_manifest_frame_settings_are_read(tmp_path):
+    jsonl = tmp_path / "s.jsonl"
+    manifest = tmp_path / "s.manifest.json"
+    jsonl.write_text(json.dumps(_moment(0, [])), encoding="utf-8")
+    manifest.write_text(
+        json.dumps({"session_id": "t", "session_start_ms": 0, "declared_event_count": 0,
+                    "frame_every": 1, "frame_width_px": 320}),
+        encoding="utf-8",
+    )
+    session = JsonlSource(jsonl_path=str(jsonl), manifest_path=str(manifest)).load()
+    assert session.manifest.frame_every == 1
+    assert session.manifest.frame_width_px == 320

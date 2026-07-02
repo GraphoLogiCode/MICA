@@ -8,7 +8,10 @@ and the coverage check then reports those as the gaps they are.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
+
+_LOGGER = logging.getLogger(__name__)
 
 from ..contracts.b0 import (
     BlockEvent,
@@ -117,6 +120,8 @@ class JsonlSource:
             mc_version=meta.get("mc_version", "unknown"),
             mod_version=meta.get("mod_version", "unknown"),
             event_schema_version=str(meta.get("event_schema_version", "1")),
+            frame_every=int(meta.get("frame_every", 0)),
+            frame_width_px=int(meta.get("frame_width_px", 0)),
         )
         packets: list[ObservationPacket] = []
         with open(self.jsonl_path, encoding="utf-8") as handle:
@@ -127,12 +132,21 @@ class JsonlSource:
         packet_tuple = tuple(packets)
         # A provisional manifest (declared_event_count = -1, or missing) means the
         # session never closed cleanly — e.g. the game crashed. Fall back to the events
-        # actually present so the recording still loads for inspection instead of failing.
+        # actually present so the recording still loads for inspection, but keep the
+        # provisional mark: the recording's end may be missing with no way to tell,
+        # so the gate must reject it rather than certify it complete.
         declared = int(meta.get("declared_event_count", -1))
-        if declared < 0:
+        provisional = declared < 0
+        if provisional:
             declared = sum(len(packet.server.block_events) for packet in packet_tuple)
+            _LOGGER.warning(
+                "manifest for %s has no final event count (crash?); "
+                "loading for inspection only - the gate will reject it",
+                manifest.session_id,
+            )
         return CapturedSession(
             manifest=manifest,
             packets=packet_tuple,
             declared_event_count=declared,
+            declared_is_provisional=provisional,
         )

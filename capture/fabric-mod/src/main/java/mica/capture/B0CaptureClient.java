@@ -129,6 +129,9 @@ public class B0CaptureClient implements ClientModInitializer {
         long lastReadbackNs = 0;
         int frameCount = 0;
         final Queue<JsonObject> eventQueue = new ConcurrentLinkedQueue<>();
+        // Counts what THIS recorder records — a change the hooks never see is invisible
+        // to it. The manifest's declared_event_count therefore proves the recorder agrees
+        // with itself, not that nothing in the world was missed (D0 2026-07-02 amendment).
         final AtomicInteger eventCounter = new AtomicInteger(0);
     }
 
@@ -174,10 +177,13 @@ public class B0CaptureClient implements ClientModInitializer {
             if (!world.isClientSide) {
                 ItemStack held = player.getItemInHand(hand);
                 if (held.getItem() instanceof BlockItem) {
-                    // A block lands on the clicked cell when that cell is replaceable
-                    // (water, grass, snow...), otherwise on the cell against the clicked
-                    // face. Testing "replaceable" (not just "air") keeps placements into
-                    // water/grass/snow from being missed.
+                    // PREDICTED, not observed: this fires on the click, before the game
+                    // decides whether a block is really placed. A block lands on the
+                    // clicked cell when that cell is replaceable (water, grass, snow...),
+                    // otherwise on the cell against the clicked face — but a click on a
+                    // chest/table, at build height, or into a mob can record a placement
+                    // that never happened. Break (above) is exact; place becomes exact
+                    // only with the authoritative mixin planned before D2 (ISSUES D-1).
                     BlockPos clicked = hit.getBlockPos();
                     BlockPos placePos = world.getBlockState(clicked).getMaterial().isReplaceable()
                             ? clicked

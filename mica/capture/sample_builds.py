@@ -41,3 +41,14 @@ def mixed_build(session_id: str = "synthetic-mixed") -> ScriptedBuild:
         ScriptedPlacement(tick=15, pos=BlockPos(0, _ROW_Y, 0), block_type=block_type, op=BlockOp.BREAK),
     )
     return ScriptedBuild(session_id=session_id, held_item=block_type, placements=placements)
+
+
+def sparse_build(session_id: str = "synthetic-sparse") -> ScriptedBuild:
+    """Two placements with a long pause between — long enough that the ~1 Hz unscored
+    context records must appear between the two corrections."""
+    block_type = "minecraft:oak_planks"
+    placements = (
+        ScriptedPlacement(tick=5, pos=BlockPos(0, _ROW_Y, 0), block_type=block_type),
+        ScriptedPlacement(tick=70, pos=BlockPos(1, _ROW_Y, 0), block_type=block_type),
+    )
+    return ScriptedBuild(session_id=session_id, held_item=block_type, placements=placements)

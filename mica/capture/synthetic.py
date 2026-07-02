@@ -21,7 +21,8 @@ from ..contracts.b0 import (
 from ..contracts.manifest import CapturedSession, SessionManifest
 from ..contracts.timebase import MS_PER_TICK
 
-_TRAILING_TICKS = 2  # a couple of empty steps after the last change, so it isn't the final moment
+_TRAILING_TICKS = 2  # quiet steps after the last change — real recordings keep running past the
+                     # last block, and the trailing idle is what closes the final action segment
 _GROUND_Y = 64  # the height the pretend player stands at, in a flat world
 _PLACEMENT_PITCH = 45.0  # the player looks down to place or break a block
 _IDLE_INPUT = InputState(keys=(), mouse_buttons=(), mouse_dx=0.0, mouse_dy=0.0)

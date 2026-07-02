@@ -6,7 +6,9 @@ from mica.validation.sync_report import build_sync_report
 
 
 def _moment(tick, events):
-    # The shape the mineflayer observer writes: client-only fields are null.
+    # A server-only capture's shape: client fields null. (No such recorder exists anymore —
+    # the old bot is retired — but ingest must still tolerate the shape, and coverage
+    # must flag it rather than crash.)
     return {
         "tick": tick,
         "wallclock_ms": tick * 50,

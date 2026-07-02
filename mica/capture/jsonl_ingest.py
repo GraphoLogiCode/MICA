@@ -1,9 +1,9 @@
 """Read a real recording written as JSONL (one captured moment per line) into a CapturedSession.
 
 The Fabric capture mod writes this format, one line per game tick, and the live stream
-sends the same per-tick shape. The mod fills every client field each tick (keys, crosshair,
-hotbar, menu, look); a partial source (e.g. a server-only capture) may leave some as None,
-and the coverage check then reports those as the gaps they are.
+sends the same per-tick shape. Some client fields are legitimately null even from the mod —
+the crosshair when aiming at open air, the frame on menu/HUD ticks. A source missing a
+field on EVERY tick is a different matter: the coverage check reports that as a gap.
 """
 from __future__ import annotations
 

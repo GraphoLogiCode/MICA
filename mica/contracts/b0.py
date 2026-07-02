@@ -9,7 +9,11 @@ from enum import Enum
 
 
 class BlockOp(Enum):
-    """A block can only be placed or broken — these are the two kinds of change."""
+    """The two kinds of change the capture records: the player placing or breaking a block.
+
+    The world changes in other ways too (water flows, fire spreads) — the mod records
+    only the player's own hand, because that is the behavior intent is read from.
+    """
 
     PLACE = "place"
     BREAK = "break"
@@ -48,6 +52,7 @@ class InputState:
 
     keys: tuple[str, ...]
     mouse_buttons: tuple[str, ...]
+    # The mod writes these as 0.0 (a documented stub) — look changes live in yaw/pitch instead.
     mouse_dx: float
     mouse_dy: float
 
@@ -63,7 +68,10 @@ class FrameRef:
 
 @dataclass(frozen=True)
 class BlockEvent:
-    # A unique number for each block change, so later steps never count the same change twice.
+    # Numbered 0, 1, 2, ... within a session, in the order the recorder saw them. Two
+    # checks depend on that exact numbering: the missing-change check compares the ids
+    # against 0..declared-1, and single consumption means each id lands in one evidence
+    # record. A gap or reuse breaks both.
     event_id: int
     pos: BlockPos
     block_type: str
@@ -96,13 +104,15 @@ class ClientObservation:
 class ServerObservation:
     """What the game server reports this moment.
 
-    It lists every block placed or broken exactly, so we can rebuild the
-    structure later without guessing.
+    Break events are exact (read from the game after the block is gone). Place events
+    are currently INFERRED from the right-click and can rarely be wrong — a click on a
+    chest or at build height records a placement that never happened. Structure
+    rebuilding (D2) must wait for the authoritative place capture (ISSUES D-1).
     """
 
     player_pos: PlayerPos | None
     block_events: tuple[BlockEvent, ...]
-    # Items the player gained or lost this moment, as (item, amount) pairs.
+    # (item, amount) pairs — the mod writes an empty list today (a documented stub).
     inventory_delta: tuple[tuple[str, int], ...]
     dimension: str
     biome: str
@@ -113,6 +123,8 @@ class ObservationPacket:
     """Everything captured for one moment of play, from both the player's game and the server."""
 
     tick: int
-    wallclock_ms: int  # the server's clock time, kept only for checking
+    # The server's clock time, used only by the drift check. In singleplayer the game
+    # and the recorder share one clock, so this equals the client stamp and drift reads 0.
+    wallclock_ms: int
     client: ClientObservation
     server: ServerObservation

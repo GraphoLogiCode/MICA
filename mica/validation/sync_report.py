@@ -152,8 +152,8 @@ def build_sync_report(
 ) -> SyncReport:
     """Run every check and decide pass or fail.
 
-    The screen image is reported but not required — it comes from the real game
-    capture, not from here.
+    Frame coverage is reported but never gates: frames are as-available by contract
+    (none on menu/HUD ticks), so a stretch without them is not a capture fault.
     """
     if not session.packets:
         return _empty_report(session, bound_ms)

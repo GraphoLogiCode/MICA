@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mica"
+version = "0.0.1"
+description = "MICA — Minecraft Intention-Aware Collaborative Agent. B0 capture contract and perception streams."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# Perception streams (D1: VPT + MineCLIP). The B0 contract layer is pure-stdlib and imports none of
+# these. Two deps are NOT pip-installable from here and are set up out of band (see Implementation
+# Log/B1 and the wrapper modules for the recipe):
+#   - torch (CUDA build) — installed separately; not pinned here because it needs a platform index.
+#   - mineclip — a git install requiring `--no-build-isolation` (old pkg_resources); it pins
+#     x_transformers==0.27.1, which is why that pin is exact below. vendor/vpt is cloned, not pip-installed.
+perception = [
+    "numpy>=1.26", "scipy>=1.11", "Pillow>=10",
+    "transformers", "kornia", "dm-tree", "gym3", "imageio", "gdown",
+    "x_transformers==0.27.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["mica*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

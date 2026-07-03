@@ -70,10 +70,21 @@ def _changes_at(build: ScriptedBuild, tick: int) -> tuple[ScriptedPlacement, ...
     return tuple(placement for placement in build.placements if placement.tick == tick)
 
 
+def _held_at(build: ScriptedBuild, tick: int) -> str:
+    """A builder equips what they are about to place — the held item switches to the
+    next change's block as it comes up, so pre-action windows see the real hand."""
+    upcoming = [p for p in build.placements
+                if p.op is BlockOp.PLACE and 0 <= p.tick - tick <= 20]
+    if upcoming:
+        return min(upcoming, key=lambda p: p.tick).block_type
+    return build.held_item
+
+
 def _client_at(build: ScriptedBuild, tick: int) -> ClientObservation:
     """What the player's game shows this step: idle, unless a block change is due."""
     # The player's clock tracks the server's clock, off by a small offset.
     capture_ms = _server_wallclock_ms(build, tick) + _jitter(build, tick)
+    held = _held_at(build, tick)
     idle = ClientObservation(
         capture_wallclock_ms=capture_ms,
         pov_frame=None,
@@ -81,8 +92,8 @@ def _client_at(build: ScriptedBuild, tick: int) -> ClientObservation:
         yaw=0.0,
         pitch=0.0,
         crosshair_target=CrosshairTarget(block_pos=None, face=None, entity=None),
-        held_item=build.held_item,
-        hotbar=(build.held_item,),
+        held_item=held,
+        hotbar=(held,),
         gui_open=False,
     )
     changes = _changes_at(build, tick)
@@ -90,11 +101,13 @@ def _client_at(build: ScriptedBuild, tick: int) -> ClientObservation:
         return idle
     first = changes[0]
     action_input = _BREAK_INPUT if first.op is BlockOp.BREAK else _PLACE_INPUT
-    # A change moves only these three things; everything else stays as idle.
+    # A change moves these things; the held item becomes what is being placed, because
+    # a real builder holds the block they use — the D1 held-item channel carries that.
     return replace(
         idle,
         input_state=action_input,
         pitch=_PLACEMENT_PITCH,
+        held_item=first.block_type,
         crosshair_target=CrosshairTarget(block_pos=first.pos, face="top", entity=None),
     )
 

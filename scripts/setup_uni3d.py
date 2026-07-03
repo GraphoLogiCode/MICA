@@ -2,16 +2,20 @@
 
     python scripts/setup_uni3d.py
 
-Three steps, each skipped if its output already exists:
-  1. Download the released uni3d-b checkpoint (HF BAAI/Uni3D, modelzoo/uni3d-b/model.pt)
+Four steps, each skipped if its output already exists:
+  1. Fetch the Uni3D source into vendor/uni3d at the PINNED commit the loader shim was
+     written against, then drop its .git — a nested repository would block tracking the
+     shim, and the pin recorded here is the provenance. (The shim itself is MICA code
+     and lives in version control; the fetched source does not.)
+  2. Download the released uni3d-b checkpoint (HF BAAI/Uni3D, modelzoo/uni3d-b/model.pt)
      to models/uni3d-b.pt.
-  2. Embed the goal taxonomy's subtype prompts with Uni3D's PAIRED text tower
+  3. Embed the goal taxonomy's subtype prompts with Uni3D's PAIRED text tower
      (open_clip EVA02-E-14-plus, laion2b_s9b_b144k — the teacher every Uni3D size was
      aligned to) and cache the pooled per-category features to
      models/uni3d_goal_prompts.pt. Pairing matters: cosines against any other text
      tower would be noise. This is the big download (~10 GB, one time); only the tiny
      embedding cache is kept in the loop afterwards.
-  3. Smoke-test the full load path: build the model through vendor/uni3d's loader shim,
+  4. Smoke-test the full load path: build the model through vendor/uni3d's loader shim,
      encode a dummy cloud, check the embedding is finite and text-cache-compatible.
 
 After this, scripts/probe_shape3d.py runs the earn-its-place probe.
@@ -20,17 +24,37 @@ from __future__ import annotations
 
 import gc
 import os
+import shutil
+import subprocess
 import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
-from mica.perception.shape3d import _CKPT, _TEXT_CACHE, prompt_texts   # noqa: E402
-from mica.contracts.b1 import GOALS                                    # noqa: E402
+from mica.perception.shape3d import _CKPT, _REPO, _TEXT_CACHE, prompt_texts   # noqa: E402
+from mica.contracts.b1 import GOALS                                           # noqa: E402
 
 _HF_REPO = "BAAI/Uni3D"
 _HF_FILE = "modelzoo/uni3d-b/model.pt"
 _TEACHER = "EVA02-E-14-plus"
 _TEACHER_TAG = "laion2b_s9b_b144k"
+_REPO_URL = "https://github.com/baaivision/Uni3D"
+_REPO_COMMIT = "64e03c3c42c196e8cb5ed03857810af9fc9ac39c"   # what the shim was written against
+
+
+def fetch_repo() -> None:
+    if os.path.exists(os.path.join(_REPO, "models", "uni3d.py")):
+        print(f"vendored source already at {os.path.relpath(_REPO, _ROOT)}")
+        return
+    print(f"fetching {_REPO_URL} @ {_REPO_COMMIT[:12]} ...")
+    # init+fetch+checkout instead of clone: the target dir already holds MICA's tracked
+    # loader shim on a fresh checkout, and clone refuses non-empty directories
+    os.makedirs(_REPO, exist_ok=True)
+    subprocess.run(["git", "init", "-q", _REPO], check=True)
+    subprocess.run(["git", "-C", _REPO, "fetch", "-q", "--depth", "1",
+                    _REPO_URL, _REPO_COMMIT], check=True)
+    subprocess.run(["git", "-C", _REPO, "checkout", "-q", "FETCH_HEAD"], check=True)
+    shutil.rmtree(os.path.join(_REPO, ".git"), ignore_errors=True)
+    print(f"  -> {os.path.relpath(_REPO, _ROOT)} (pinned, .git dropped)")
 
 
 def fetch_checkpoint() -> None:
@@ -41,7 +65,6 @@ def fetch_checkpoint() -> None:
     print(f"downloading {_HF_REPO}/{_HF_FILE} ...")
     got = hf_hub_download(repo_id=_HF_REPO, filename=_HF_FILE)
     os.makedirs(os.path.dirname(_CKPT), exist_ok=True)
-    import shutil
     shutil.copyfile(got, _CKPT)
     print(f"  -> {os.path.relpath(_CKPT, _ROOT)}")
 
@@ -100,6 +123,7 @@ def smoke_test() -> None:
 
 
 if __name__ == "__main__":
+    fetch_repo()
     fetch_checkpoint()
     cache_text_embeddings()
     smoke_test()

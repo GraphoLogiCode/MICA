@@ -26,7 +26,7 @@ def main() -> int:
         print("no capture found")
         return 1
     session = JsonlSource(jsonl, jsonl.replace(".jsonl", ".manifest.json")).load()
-    checks = gate_checks(session)
+    checks = gate_checks(session, os.path.dirname(os.path.abspath(jsonl)))
 
     print(f"B0 GATE  {os.path.basename(jsonl)}")
     overall = True

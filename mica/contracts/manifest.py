@@ -25,6 +25,12 @@ class SessionManifest:
     # Width 256+ and the mod's 160 height floor let both B1 models shrink, never enlarge.
     frame_every: int = 0
     frame_width_px: int = 0
+    # Region snapshots (D2's ground truth). quiet_ticks > 0 means this recording takes
+    # them (one at start, one after each building burst, at a quiet moment); 0 = an older
+    # recording that can't have any. The region is the fixed box every snapshot frames,
+    # as (x0, y0, z0, x1, y1, z1) inclusive — empty until the first in-world tick fixed it.
+    snapshot_quiet_ticks: int = 0
+    snapshot_region: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)

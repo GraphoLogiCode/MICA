@@ -50,3 +50,20 @@ def test_provisional_count_is_hard_rejected():
     assert gate_passes(session)
     assert "manifest finalized (clean stop)" in _failed(crashed)
     assert not gate_passes(crashed)
+
+
+def test_snapshots_required_only_when_declared(tmp_path):
+    session = _with_frames(generate_session(wall_row_build()), 256, 144)
+    declared = dataclasses.replace(
+        session, manifest=dataclasses.replace(session.manifest, snapshot_quiet_ticks=40)
+    )
+    # declares snapshots but has none on disk -> the capture is not D2-replayable, fail
+    failing = {name for name, ok, _ in gate_checks(declared, str(tmp_path)) if not ok}
+    assert "region snapshots (D2)" in failing
+    # the initial snapshot appears -> pass
+    snap_dir = tmp_path / declared.manifest.session_id / "snapshots"
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "0.json").write_text("{}", encoding="utf-8")
+    assert gate_passes(declared, str(tmp_path))
+    # an older capture that never declared snapshots must not fail retroactively
+    assert gate_passes(session, str(tmp_path))

@@ -122,6 +122,8 @@ class JsonlSource:
             event_schema_version=str(meta.get("event_schema_version", "1")),
             frame_every=int(meta.get("frame_every", 0)),
             frame_width_px=int(meta.get("frame_width_px", 0)),
+            snapshot_quiet_ticks=int(meta.get("snapshot_quiet_ticks", 0)),
+            snapshot_region=tuple(meta.get("snapshot_region", ())),
         )
         packets: list[ObservationPacket] = []
         with open(self.jsonl_path, encoding="utf-8") as handle:

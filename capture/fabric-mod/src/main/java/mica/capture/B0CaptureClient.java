@@ -15,16 +15,15 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
-import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
-import net.minecraft.world.InteractionResult;
-import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -44,6 +43,10 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -63,9 +66,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 // stream, so D1/D2 are written once against "a packet source", live or replayed.
 //
 // Each packet carries keys/mouse, crosshair, held item, hotbar, menu, look, position,
-// POV frame, and the player's own block place/break events. Block events come from
-// Fabric's player events on the server side (no world-gen noise), buffered in a
-// thread-safe queue and drained into each tick's packet.
+// POV frame, and the player's own block place/break events. Break events come from
+// Fabric's server-side player event; place events come from a mixin inside
+// BlockItem.place, AFTER the game accepted the placement — so what is recorded is what
+// actually landed, not what a click predicted (see BlockItemMixin for the known
+// door/bed gap). Both are buffered in a thread-safe queue and drained into each
+// tick's packet.
+//
+// REGION SNAPSHOTS (for D2): the ground truth its event-replay is checked against.
+// A fixed box around the player's starting spot is saved as palette + run-length
+// counts — once at the start, then again after each building burst, at a quiet
+// moment (no block change for 2 s) because the client's copy of the world can trail
+// the server by a tick right after a change. Snapshots store block identity only
+// (no facing/waterlogged state), matching what the event stream carries. Files:
+// <session>/snapshots/<tick>.json; the box is recorded in the manifest.
 //
 // POV frames: the framebuffer is read on the render thread (one GPU->CPU copy); the
 // downscale, the socket send, and the PNG write all run off it. Captured at 20 fps to
@@ -91,6 +105,18 @@ public class B0CaptureClient implements ClientModInitializer {
     private static final int MIN_FRAME_WIDTH = 256;
     private static final int MIN_FRAME_HEIGHT = 160;
 
+    // Region snapshots wait for this many event-free ticks (2 s) so the client's copy
+    // of the world has settled — right after a change it can trail the server by a tick.
+    private static final int QUIESCENT_TICKS = 40;
+    // The snapshot box around the player's starting spot. Builds are capped to roughly
+    // 16x16x16 (the D2 templates), so radius 24 leaves room to wander while placing.
+    private static final int REGION_RADIUS_DEFAULT = 24;   // horizontal, blocks
+    private static final int REGION_BELOW = 16;            // how far under the feet to include
+    private static final int REGION_ABOVE = 32;            // headroom for towers
+
+    // The mixin (server thread) needs a path to the running mod instance.
+    private static volatile B0CaptureClient INSTANCE;
+
     private volatile BufferedWriterState state;   // read on the server thread (block events) too
     private volatile LiveStream live;             // read on the frame-writer thread too
     private KeyMapping toggleHud;
@@ -101,6 +127,7 @@ public class B0CaptureClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         LOGGER.info("[MICA] B0 capture mod loaded.");
+        INSTANCE = this;
         state = openSession();
         live = openLiveStream();
         toggleHud = KeyBindingHelper.registerKeyBinding(new KeyMapping(
@@ -132,7 +159,16 @@ public class B0CaptureClient implements ClientModInitializer {
         // Counts what THIS recorder records — a change the hooks never see is invisible
         // to it. The manifest's declared_event_count therefore proves the recorder agrees
         // with itself, not that nothing in the world was missed (D0 2026-07-02 amendment).
+        // With the authoritative place mixin the hooks see every ordinary placement, and
+        // the final arbiter of "nothing missed" is D2's replay-vs-snapshot check.
         final AtomicInteger eventCounter = new AtomicInteger(0);
+        // Region snapshots (D2 ground truth). The box is fixed on the first in-world
+        // tick, around wherever the player starts.
+        Path snapshotsDir;
+        int[] snapshotRegion;               // {x0, y0, z0, x1, y1, z1}, inclusive
+        int quietTicks = 0;                 // ticks since the last recorded block event
+        int eventsSinceSnapshot = 0;
+        int snapshotCount = 0;
     }
 
     private BufferedWriterState openSession() {
@@ -145,7 +181,9 @@ public class B0CaptureClient implements ClientModInitializer {
             st.jsonlPath = dir.resolve(st.sessionId + ".jsonl");
             st.manifestPath = dir.resolve(st.sessionId + ".manifest.json");
             st.framesDir = dir.resolve(st.sessionId).resolve("frames");
+            st.snapshotsDir = dir.resolve(st.sessionId).resolve("snapshots");
             Files.createDirectories(st.framesDir);
+            Files.createDirectories(st.snapshotsDir);
             st.writer = Files.newBufferedWriter(st.jsonlPath, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             st.frameEvery = Math.max(1, Integer.getInteger("mica.frameEvery", 1));   // 1 = 20 fps (contract)
@@ -166,37 +204,25 @@ public class B0CaptureClient implements ClientModInitializer {
         }
     }
 
-    // The player's own block changes, on the server side (no world-gen noise).
+    // The player's own block breaks, on the server side (no world-gen noise). Places are
+    // recorded by BlockItemMixin — inside the game's own success path, not from clicks.
     private void registerBlockEvents() {
         PlayerBlockBreakEvents.AFTER.register((world, player, pos, blockState, blockEntity) -> {
             if (world.isClientSide) return;
             String blockType = Registry.BLOCK.getKey(blockState.getBlock()).toString();
             recordEvent(pos.getX(), pos.getY(), pos.getZ(), blockType, "break", player.getName().getString());
         });
-        UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
-            if (!world.isClientSide) {
-                ItemStack held = player.getItemInHand(hand);
-                if (held.getItem() instanceof BlockItem) {
-                    // PREDICTED, not observed: this fires on the click, before the game
-                    // decides whether a block is really placed. A block lands on the
-                    // clicked cell when that cell is replaceable (water, grass, snow...),
-                    // otherwise on the cell against the clicked face — but a click on a
-                    // chest/table, at build height, or into a mob can record a placement
-                    // that never happened. Break (above) is exact; place becomes exact
-                    // only with the authoritative mixin planned before D2 (ISSUES D-1).
-                    BlockPos clicked = hit.getBlockPos();
-                    BlockPos placePos = world.getBlockState(clicked).getMaterial().isReplaceable()
-                            ? clicked
-                            : clicked.relative(hit.getDirection());
-                    if (world.getBlockState(placePos).getMaterial().isReplaceable()) {
-                        String blockType = Registry.BLOCK.getKey(((BlockItem) held.getItem()).getBlock()).toString();
-                        recordEvent(placePos.getX(), placePos.getY(), placePos.getZ(), blockType, "place",
-                                player.getName().getString());
-                    }
-                }
-            }
-            return InteractionResult.PASS;   // observe only, don't change behaviour
-        });
+    }
+
+    // Called by BlockItemMixin (server thread) after the game ACCEPTED a placement. The
+    // world state at pos is read back, so the event carries what actually landed — a
+    // stair keeps its block id, a rejected click never reaches here. player is null for
+    // machine placements (dispensers); those are not the human's hand and are skipped.
+    public static void recordAuthoritativePlace(Level world, BlockPos pos, Player player) {
+        B0CaptureClient mod = INSTANCE;
+        if (mod == null || world.isClientSide || player == null) return;
+        String blockType = Registry.BLOCK.getKey(world.getBlockState(pos).getBlock()).toString();
+        mod.recordEvent(pos.getX(), pos.getY(), pos.getZ(), blockType, "place", player.getName().getString());
     }
 
     // Called from the server thread; the per-tick drain (client thread) reads the queue.
@@ -249,7 +275,8 @@ public class B0CaptureClient implements ClientModInitializer {
         pos.add(player.getY());
         pos.add(player.getZ());
         s.add("player_pos", pos);
-        s.add("block_events", drainEvents());
+        JsonArray drained = drainEvents();
+        s.add("block_events", drained);
         s.add("inventory_delta", new JsonArray());
         s.addProperty("dimension", client.level.dimension().location().toString());
         s.addProperty("biome", "unknown");
@@ -264,6 +291,110 @@ public class B0CaptureClient implements ClientModInitializer {
         } catch (IOException e) {
             LOGGER.error("[MICA] write failed", e);
         }
+        maybeSnapshot(client, player, t, drained.size());
+    }
+
+    // ---- region snapshots (D2 ground truth) ----------------------------------------
+
+    // Take the first snapshot as soon as we know where the player is, then one after
+    // each building burst — at a quiet moment, so the client's world copy has settled
+    // and every event already drained into a packet belongs strictly before it.
+    private void maybeSnapshot(Minecraft client, LocalPlayer player, int tick, int eventsThisTick) {
+        if (state.snapshotRegion == null) {
+            initSnapshotRegion(player);
+            writeSnapshot(client, tick);
+            return;
+        }
+        if (eventsThisTick > 0) {
+            state.quietTicks = 0;
+            state.eventsSinceSnapshot += eventsThisTick;
+            return;
+        }
+        state.quietTicks++;
+        if (state.eventsSinceSnapshot > 0 && state.quietTicks == QUIESCENT_TICKS) {
+            writeSnapshot(client, tick);
+        }
+    }
+
+    private void initSnapshotRegion(LocalPlayer player) {
+        int radius = Math.max(8, Integer.getInteger("mica.snapshotRadius", REGION_RADIUS_DEFAULT));
+        int px = (int) Math.floor(player.getX());
+        int py = (int) Math.floor(player.getY());
+        int pz = (int) Math.floor(player.getZ());
+        state.snapshotRegion = new int[]{
+                px - radius, Math.max(0, py - REGION_BELOW), pz - radius,
+                px + radius, Math.min(255, py + REGION_ABOVE), pz + radius};
+        writeManifest(state, -1);   // the box defines every snapshot's frame; persist it now, crash or not
+        LOGGER.info("[MICA] snapshot region fixed: " + java.util.Arrays.toString(state.snapshotRegion));
+    }
+
+    // Read the whole box on the client thread (a ~100k-cell read costs ~10 ms — felt as
+    // a tiny hitch, which is why it only runs at quiet moments), squeeze it down to a
+    // palette plus run-lengths (uniform ground and air collapse to a handful of runs),
+    // and hand the file write to the frame-writer thread.
+    private void writeSnapshot(Minecraft client, int tick) {
+        long t0 = System.nanoTime();
+        int[] r = state.snapshotRegion;
+        List<String> palette = new ArrayList<>();
+        Map<String, Integer> indexOf = new HashMap<>();
+        JsonArray runs = new JsonArray();
+        int runIndex = -1;
+        int runLength = 0;
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+        // Scan order y -> z -> x; the Python side must walk the same order to decode.
+        for (int y = r[1]; y <= r[4]; y++) {
+            for (int z = r[2]; z <= r[5]; z++) {
+                for (int x = r[0]; x <= r[3]; x++) {
+                    cursor.set(x, y, z);
+                    String id = Registry.BLOCK.getKey(client.level.getBlockState(cursor).getBlock()).toString();
+                    Integer idx = indexOf.get(id);
+                    if (idx == null) {
+                        idx = palette.size();
+                        indexOf.put(id, idx);
+                        palette.add(id);
+                    }
+                    if (idx == runIndex) {
+                        runLength++;
+                    } else {
+                        if (runLength > 0) runs.add(runPair(runLength, runIndex));
+                        runIndex = idx;
+                        runLength = 1;
+                    }
+                }
+            }
+        }
+        if (runLength > 0) runs.add(runPair(runLength, runIndex));
+
+        JsonObject snap = new JsonObject();
+        snap.addProperty("tick", tick);
+        JsonArray region = new JsonArray();
+        for (int v : r) region.add(v);
+        snap.add("region", region);
+        JsonArray names = new JsonArray();
+        for (String name : palette) names.add(name);
+        snap.add("palette", names);
+        snap.add("runs", runs);
+
+        String json = snap.toString();
+        Path out = state.snapshotsDir.resolve(tick + ".json");
+        state.frameWriter.submit(() -> {
+            try {
+                Files.write(out, json.getBytes(StandardCharsets.UTF_8));
+            } catch (IOException e) {
+                LOGGER.error("[MICA] snapshot write failed", e);
+            }
+        });
+        state.eventsSinceSnapshot = 0;
+        state.snapshotCount++;
+        LOGGER.info("[MICA] region snapshot @" + tick + " (" + runs.size() + " runs, "
+                + (System.nanoTime() - t0) / 1_000_000 + " ms)");
+    }
+
+    private static JsonArray runPair(int count, int paletteIndex) {
+        JsonArray pair = new JsonArray();
+        pair.add(count);
+        pair.add(paletteIndex);
+        return pair;
     }
 
     // Move every block change seen since the last tick into this tick's packet.
@@ -370,6 +501,8 @@ public class B0CaptureClient implements ClientModInitializer {
         y += step;
         font.drawShadow(poseStack, "block events " + state.eventCounter.get(), x, y, 0xFFFFFF);
         y += step;
+        font.drawShadow(poseStack, "snapshots " + state.snapshotCount, x, y, 0xFFFFFF);
+        y += step;
         int liveColor = (live != null && live.hasConsumer()) ? 0x55FF55 : 0xAAAAAA;
         font.drawShadow(poseStack, "live " + (live == null ? "off" : live.hasConsumer() ? "connected" : "waiting"), x, y, liveColor);
         y += step;
@@ -439,12 +572,20 @@ public class B0CaptureClient implements ClientModInitializer {
         m.addProperty("session_id", st.sessionId);
         m.addProperty("session_start_ms", st.sessionStartMs);
         m.addProperty("mc_version", "1.16.5");
-        m.addProperty("mod_version", "fabric-b0-0.0.2");
+        m.addProperty("mod_version", "fabric-b0-0.0.3");
         m.addProperty("event_schema_version", "1");   // B0 block-event schema version (jsonl_ingest reads this)
         // The frame settings this recording ran with — two captures with different
         // settings must be tellable apart from their manifests alone.
         m.addProperty("frame_every", st.frameEvery);
         m.addProperty("frame_width_px", st.frameSize);
+        // Snapshot declaration: the quiet-tick rule says this build takes region
+        // snapshots at all; the box (written once known) frames every snapshot file.
+        m.addProperty("snapshot_quiet_ticks", QUIESCENT_TICKS);
+        if (st.snapshotRegion != null) {
+            JsonArray region = new JsonArray();
+            for (int v : st.snapshotRegion) region.add(v);
+            m.add("snapshot_region", region);
+        }
         m.addProperty("declared_event_count", declaredCount);
         try {
             Files.write(st.manifestPath, m.toString().getBytes(StandardCharsets.UTF_8));

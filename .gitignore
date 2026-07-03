@@ -36,3 +36,4 @@ capture/raw/*
 # Fabric dev-run + gradle caches
 capture/fabric-mod/run/
 capture/fabric-mod/.gradle/
+capture/scripted/

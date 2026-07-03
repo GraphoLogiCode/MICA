@@ -107,6 +107,7 @@ def _write_d1_provenance(evidence_path: str, stride: int) -> str:
     way D2's templates define its features — changing any of them silently changes every
     future score, so the sidecar must pin them.
     """
+    from mica.contracts.goals import TAXONOMY, TAXONOMY_VERSION
     from mica.perception.mineclip_head import PROMPT_TEMPLATES
 
     provenance = {
@@ -115,6 +116,8 @@ def _write_d1_provenance(evidence_path: str, stride: int) -> str:
         "mineclip_checkpoint": "mineclip_attn.pth",
         "mineclip_checkpoint_sha256": _sha256(os.path.join(_ROOT, "models", "mineclip_attn.pth")),
         "goals": list(GOALS),
+        "goal_taxonomy_version": TAXONOMY_VERSION,
+        "goal_taxonomy": {goal: list(subs) for goal, subs in TAXONOMY.items()},
         "prompt_templates": list(PROMPT_TEMPLATES),
         "s_goal_path": "trained-video-adapter",   # through the reward head's adapter + residual gate
         "s_goal_clip_stride": stride,
@@ -153,7 +156,8 @@ def main() -> int:
 
     # A capture the B0 gate rejects (truncated, misaligned, missing fields) must never
     # become evidence — refuse it outright so the corpus can't be poisoned quietly.
-    failing = [(name, detail) for name, passed, detail in gate_checks(session) if not passed]
+    capture_dir = os.path.dirname(os.path.abspath(jsonl))
+    failing = [(name, detail) for name, passed, detail in gate_checks(session, capture_dir) if not passed]
     if failing and "--allow-ungated" not in sys.argv:
         print(f"D1  {os.path.basename(jsonl)}")
         print("  REFUSED: this session fails the B0 gate (run scripts/b0_gate.py):")

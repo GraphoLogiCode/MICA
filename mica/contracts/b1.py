@@ -16,11 +16,11 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .b0 import BlockPos
-
-# The fixed goal set G (|G| = 5) — the whole-building types s_goal scores against. It lives
-# in the contract because it fixes the length of the s_goal vector and is shared by the
-# MineCLIP head and the validators. House/watchtower/bridge/farm plot/animal pen, per the D1 spec.
-GOALS = ("house", "watchtower", "bridge", "farm plot", "animal pen")
+# The goal taxonomy lives in contracts/goals.py: GOALS is its five top-level categories —
+# what s_goal scores against and what the belief's first proof target runs over. The
+# style subtypes underneath belong to D2's template instances and to state_feats cues;
+# they never widen the s_goal vector.
+from .goals import GOALS   # noqa: F401  (re-exported: every consumer imports GOALS from here)
 
 
 class MacroAction(Enum):

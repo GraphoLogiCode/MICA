@@ -104,8 +104,31 @@ Mod rebuilt (jar 07-02 01:03, `fabric-b0-0.0.2`); every check below verified liv
   tracker beats the structure-only floor for the first time.** Handoff verified per record; invariants
   every step; tests 82 → **86** (channel-arrival, held-item-reaches-evidence, mismatch-refusal,
   load-bearing-wire tests).
+- [x] **Three-arm stream ablation added (2026-07-03)** — `strip_structure()` completes the triangle.
+  Measured over 30 sessions: **3D structure contributes +0.500 accuracy and +0.152 earliness over
+  2D-only** (0.933/0.416 fused vs 0.433/0.568 2D-only); 2D behavior contributes +0.039 earliness at
+  equal accuracy. Fusion beats both single streams and the structure-only floor. The "does 3D help
+  intent inference" question now has a standing measured artifact (`belief_summary.json`).
 - [ ] Not yet consumed by v0 heads: `global_feats` (flows, unused), `h2d`/`h3d` (None until
-  pixels/Phase E), focus dwell (inert on synthetic — real captures will exercise it).
+  pixels/Phase E — h3d now has a licensed producer, below), focus dwell (inert on synthetic —
+  real captures will exercise it).
+- [x] **Pretrained-3D arm DECIDED + measured (2026-07-03): Uni3D-B**, chosen over OpenShape
+  (vanilla ViT via timm — no MinkowskiEngine on Windows — and stronger zero-shot: 55.3 vs 46.8
+  LVIS, 88.2 vs 85.3 MN40; both saved papers read in full). Adaptation: player-built cells →
+  surface point cloud (`mica/perception/shape3d.py`), vendored repo behind a pure-torch FPS shim
+  (`vendor/uni3d/mica_uni3d_loader.py`, verified against brute force), prompts embedded with the
+  PAIRED teacher (EVA02-E-14-plus). **Two probe verdicts on the corpus (chance 0.2):** zero-shot
+  text cosines FAIL the earn-its-place gate (≈chance while building, 0.50 at completion vs floor
+  0.967; y-up and prompt-phrasing artifacts ruled out) → **no s_shape field in B2**; the raw
+  1024-dim embedding PASSES a session-held-out linear-readout probe (beats the symbolic floor at
+  every bin through 70% progress, trails only late) → **`embed()` is the licensed h3d producer
+  for Phase E's trained adapter** (`capture/scripted/shape3d_probe.json`,
+  `h3d_linear_probe.json`; setup: `scripts/setup_uni3d.py`). Rerun both probes on real captures.
+- [ ] **Remaining pretrained-3D comparator arms (open)**: (2) AssistanceZero's released voxel
+  goal head as the in-domain pretrained comparator (the amortized-belief baseline the eval plan
+  wants); (3) SpatialLM strictly as a measured syn2real transfer arm; (4) multi-view MineCLIP
+  orbit as a depth-via-views proxy. All framed as ablation arms against the symbolic structure
+  channel, which is the floor they must beat.
 
 ---
 

@@ -27,9 +27,14 @@ capture/fabric-mod/.gradle/
 capture/fabric-mod/build/
 capture/fabric-mod/run/
 
-# Foundation-model weights + vendored VPT repo — re-downloadable (see Implementation Log/B1)
+# Foundation-model weights + vendored repos — re-downloadable (see Implementation Log/B1, B2).
+# One exception: MICA's own Uni3D loader shim lives inside the vendored repo (it has to sit on
+# that repo's import root) and is real project code, so it is tracked.
 models/
-vendor/
+vendor/*
+!vendor/uni3d
+vendor/uni3d/*
+!vendor/uni3d/mica_uni3d_loader.py
 # All generated capture output (frames, manifests, evidence2d) — keep the dir, not the data
 capture/raw/*
 !capture/raw/.gitkeep

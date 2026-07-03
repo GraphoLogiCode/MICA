@@ -53,6 +53,13 @@ _STYLE_MATERIALS: dict[str, frozenset[str]] = {
                              if required != REQ_SOLID)
     for templates in TEMPLATES.values() for template in templates
 }
+# Category-level union, for when no style read exists (the structure-stripped arm):
+# knowing a category's material vocabulary is static goal knowledge, not runtime 3D.
+_CATEGORY_MATERIALS: dict[str, frozenset[str]] = {
+    goal: frozenset(block for template in templates for block in
+                    _STYLE_MATERIALS[template.name])
+    for goal, templates in TEMPLATES.items()
+}
 
 
 def _softmax(logits: dict) -> dict:
@@ -91,8 +98,11 @@ def _base_logits(evidence: FusedEvidence) -> dict:
 
 def _material_match(evidence: FusedEvidence, goal: str) -> float:
     """Does the held item say this category's winning style? Fences say pen, poppies say
-    garden; a style built from any solid block gets a weak nod for holding one at all."""
-    signature = _STYLE_MATERIALS[evidence.per_goal[goal].subtype]
+    garden; a style built from any solid block gets a weak nod for holding one at all.
+    Without a style read (structure stripped), fall back to the category's whole
+    material vocabulary — static goal knowledge, not a 3D runtime output."""
+    subtype = evidence.per_goal[goal].subtype
+    signature = _STYLE_MATERIALS.get(subtype, _CATEGORY_MATERIALS[goal])
     held = evidence.state_feats.held_item
     if signature:
         return 1.0 if held in signature else 0.0
@@ -149,3 +159,18 @@ def strip_behavior(evidence: FusedEvidence) -> FusedEvidence:
         s_goal=None,
         h2d=None,
     )
+
+
+def strip_structure(evidence: FusedEvidence) -> FusedEvidence:
+    """The D2 with/without probe, mirror of strip_behavior: blank exactly the 3D
+    structure channels — per-goal features zeroed, the style read removed, global shape
+    facts emptied — keeping the behavior stream. What remains is the 2D-only arm."""
+    zeroed = {
+        goal: dataclasses.replace(evidence.per_goal[goal], comp=0.0, edit_distance=0,
+                                  fit=0.0, subtype="", delta_comp=0.0)
+        for goal in GOALS
+    }
+    empty_global = dataclasses.replace(
+        evidence.global_feats, built_count=0, bbox=None, centroid=None, planar_runs=0,
+        has_enclosure=False, symmetry=0.0, symmetry_support=0)
+    return dataclasses.replace(evidence, per_goal=zeroed, global_feats=empty_global, h3d=None)

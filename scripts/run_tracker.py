@@ -25,7 +25,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 from mica.contracts.b3 import fuse_dicts                     # noqa: E402
-from mica.intent.heads_v0 import likelihood, strip_behavior  # noqa: E402
+from mica.intent.heads_v0 import likelihood, strip_behavior, strip_structure  # noqa: E402
 from mica.intent.tracker import (                            # noqa: E402
     TrackerParams, category_marginal, correct, mode_marginal, predict, uniform_belief,
 )
@@ -85,29 +85,31 @@ def main() -> int:
                        for f in fused]
         entry = {"session": session_id, "goal": label["goal"], "mode": label["mode"],
                  "fused": _track(fused, label["goal"], params),
-                 "stripped": _track([strip_behavior(f) for f in fused], label["goal"], params),
+                 "no_behavior": _track([strip_behavior(f) for f in fused], label["goal"], params),
+                 "no_structure": _track([strip_structure(f) for f in fused], label["goal"], params),
                  "floor_sustained_from": round(_sustained_from(floor_calls, label["goal"]), 3),
                  "floor_final_correct": floor_calls[-1] == label["goal"]}
         results.append(entry)
 
-    def arm(name, key):
-        accuracy = statistics.mean(r[name]["final_correct"] for r in results) \
-            if key else statistics.mean(r["floor_final_correct"] for r in results)
-        earliness = statistics.mean(r[name]["sustained_from"] for r in results) \
-            if key else statistics.mean(r["floor_sustained_from"] for r in results)
-        return accuracy, earliness
+    def arm(name):
+        return (statistics.mean(r[name]["final_correct"] for r in results),
+                statistics.mean(r[name]["sustained_from"] for r in results))
 
-    fused_acc, fused_early = arm("fused", True)
-    stripped_acc, stripped_early = arm("stripped", True)
-    floor_acc, floor_early = arm("", False)
+    fused_acc, fused_early = arm("fused")
+    no_b_acc, no_b_early = arm("no_behavior")
+    no_s_acc, no_s_early = arm("no_structure")
+    floor_acc = statistics.mean(r["floor_final_correct"] for r in results)
+    floor_early = statistics.mean(r["floor_sustained_from"] for r in results)
 
     summary = {
         "params": {"lambda_g": params.lambda_g, "lambda_z": params.lambda_z,
                    "epsilon": params.epsilon, "heads": "hand-coded v0"},
         "sessions": len(results),
         "fused": {"final_accuracy": round(fused_acc, 3), "mean_sustained_from": round(fused_early, 3)},
-        "behavior_stripped": {"final_accuracy": round(stripped_acc, 3),
-                              "mean_sustained_from": round(stripped_early, 3)},
+        "no_behavior_3d_only": {"final_accuracy": round(no_b_acc, 3),
+                                "mean_sustained_from": round(no_b_early, 3)},
+        "no_structure_2d_only": {"final_accuracy": round(no_s_acc, 3),
+                                 "mean_sustained_from": round(no_s_early, 3)},
         "structure_only_floor": {"final_accuracy": round(floor_acc, 3),
                                  "mean_sustained_from": round(floor_early, 3)},
         "per_session": results,
@@ -116,13 +118,15 @@ def main() -> int:
     with open(out, "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2)
 
-    print(f"belief tracker (hand-coded heads v0) over {len(results)} sessions - two arms")
-    print(f"  final accuracy:   fused {fused_acc:.3f}   behavior-stripped {stripped_acc:.3f}"
-          f"   floor {floor_acc:.3f}")
-    print(f"  sustained from:   fused {fused_early:.3f}   behavior-stripped {stripped_early:.3f}"
-          f"   floor {floor_early:.3f}   (lower = earlier)")
-    print(f"  D1 behavior contribution: {stripped_early - fused_early:+.3f} earliness,"
-          f" {fused_acc - stripped_acc:+.3f} accuracy")
+    print(f"belief tracker (hand-coded heads v0) over {len(results)} sessions - three arms")
+    print(f"  final accuracy:   fused {fused_acc:.3f}   3D-only {no_b_acc:.3f}"
+          f"   2D-only {no_s_acc:.3f}   floor {floor_acc:.3f}")
+    print(f"  sustained from:   fused {fused_early:.3f}   3D-only {no_b_early:.3f}"
+          f"   2D-only {no_s_early:.3f}   floor {floor_early:.3f}   (lower = earlier)")
+    print(f"  3D structure contribution (vs 2D-only): {no_s_early - fused_early:+.3f} earliness,"
+          f" {fused_acc - no_s_acc:+.3f} accuracy")
+    print(f"  2D behavior contribution (vs 3D-only):  {no_b_early - fused_early:+.3f} earliness,"
+          f" {fused_acc - no_b_acc:+.3f} accuracy")
     print(f"  handoff verified per record; invariants held every step  ->  {os.path.basename(out)}")
     return 0
 

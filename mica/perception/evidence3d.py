@@ -10,8 +10,11 @@ constant by construction, not approximation.
 """
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
+from typing import Callable, Iterable
 
+from ..contracts.b0 import BlockEvent, ObservationPacket, is_agent_actor
 from ..contracts.b1 import GOALS, Evidence2D
 from ..contracts.b2 import ROTATIONS, Evidence3D, GlobalStructure, PerGoalStructure, Pose
 from .templates import REQ_SOLID, TEMPLATES, Template, footprint, rotate_offset
@@ -120,6 +123,15 @@ def _best_instance(world: ReplayWorld, goal: str, built) -> tuple[_GoalReading, 
     return max(readings, key=lambda pair: (pair[0].fit * pair[0].comp, pair[0].fit))
 
 
+def read_finished_build(world: ReplayWorld) -> dict[str, tuple[_GoalReading, str]]:
+    """The finished-structure matcher — Source B's recognizer (D3), which is exactly
+    the stream's own per-category best-instance reading evaluated once on a COMPLETED
+    world. At 100% completion the mid-build registration ambiguity is gone: the blocks
+    fully constrain the fit, which is what makes the hindsight label trustworthy."""
+    built = world.built()
+    return {goal: _best_instance(world, goal, built) for goal in GOALS}
+
+
 def _planar_runs(built) -> int:
     runs = 0
     cells = set(built)
@@ -208,29 +220,121 @@ def _global_feats(world: ReplayWorld, recent_edits) -> GlobalStructure:
     )
 
 
-def build_evidence3d(
-    world: ReplayWorld,
-    corrections: tuple[Evidence2D, ...],
-    events_by_id: dict,
-) -> list[Evidence3D]:
-    """One Evidence3D per scored correction, in order; events applied after their record."""
-    recent_edits: list[tuple[int, int, int]] = []
-    comp_history: dict[str, list[float]] = {goal: [] for goal in GOALS}
-    cached: dict[str, tuple[_GoalReading, str]] | None = None
-    cached_global: GlobalStructure | None = None
-    records: list[Evidence3D] = []
-    for correction in corrections:
+class Evidence3DStream:
+    """D2 as a correction-fed machine: block events go in as their ticks arrive, one
+    Evidence3D comes out per scored B1 record. This is THE structure stage — the offline
+    `build_evidence3d` below just seeds it and loops.
+
+    The snapshot rule is baked into the call order: features are computed on the world
+    as it stood BEFORE this correction's first block change, then the correction's own
+    events are applied, then the feature cache is dropped so the next record recomputes.
+    Between events nothing recomputes — the region only changes through events.
+    """
+
+    def __init__(self, world: ReplayWorld,
+                 h3d_fn: Callable[[dict], "tuple[float, ...] | None"] | None = None):
+        self._world = world
+        self._base_region = world.region                # how far the base knowledge reaches
+        self._events: dict[int, BlockEvent] = {}        # ids seen but not yet applied
+        self._seeded: set[int] = set()                  # ids applied by seed_history (catch-up)
+        self._recent_edits: deque[tuple[int, int, int]] = deque(maxlen=_RECENT_EDITS)
+        # delta_comp's baseline needs the first-ever comp reading plus the last few —
+        # same numbers the old whole-list history produced, in bounded memory.
+        self._first_comp: dict[str, float] = {}
+        self._last_comps: dict[str, deque[float]] = {
+            goal: deque(maxlen=DELTA_COMP_WINDOW) for goal in GOALS}
+        self._cached: dict[str, tuple[_GoalReading, str]] | None = None
+        self._cached_global: GlobalStructure | None = None
+        # Optional learned 3D channel: a callable taking the player-built cells and
+        # returning the build's dense shape embedding (Uni3D's, in production) as a
+        # plain tuple, or None when nothing is built. Kept behind a callable so this
+        # module stays stdlib-only — the torch model lives in shape3d.py.
+        self._h3d_fn = h3d_fn
+        self._cached_h3d: tuple[float, ...] | None = None
+
+    def harvest(self, packet: ObservationPacket) -> None:
+        """Remember this tick's block events; they apply when a correction consumes them."""
+        self.remember(packet.server.block_events)
+
+    def remember(self, events: Iterable[BlockEvent]) -> None:
+        """Take events into the FEATURE world's pool — humans only. The agent's own
+        blocks must never shape the evidence (A7, contracts/b0.py): they are dropped
+        here, at the one entry point, so no path can apply them to this world. The
+        snapshot monitor keeps its own world and applies EVERY event — the real world
+        contains the agent's blocks, and the replay proof must match reality."""
+        for event in events:
+            if event.event_id in self._seeded:
+                continue                     # already in the world from catch-up
+            if not is_agent_actor(event.actor):
+                self._events[event.event_id] = event
+
+    def seed_history(self, events: Iterable[BlockEvent]) -> int:
+        """Late-attach catch-up: apply block events that happened BEFORE this stream
+        started listening, straight into the feature world. Human events only — the
+        same A7 rule as remember(), because the agent's own blocks must never shape
+        the evidence. Every applied id is recorded so the live stream can never apply
+        the same event a second time. Returns how many events were applied."""
+        applied = 0
+        for event in events:
+            if is_agent_actor(event.actor):
+                continue
+            self._world.apply(event)
+            self._recent_edits.append((event.pos.x, event.pos.y, event.pos.z))
+            self._seeded.add(event.event_id)
+            applied += 1
+        return applied
+
+    def notice_region(self, region) -> None:
+        """Region v3: the capture frame grew. Widen the feature world's escape test
+        now; the adopted cells' base arrives with the growth snapshot (extend_world)."""
+        self._world.grow(region)
+
+    def extend_world(self, region, cells: dict) -> None:
+        """Adopt a growth snapshot: the wider frame plus base state for the cells
+        beyond previous base coverage, so built-vs-terrain stays exact in the new
+        territory. Existing evidence never changes — every spatial feature derives
+        from built cells' absolute coordinates, so growth only ADMITS cells. The
+        feature caches are left alone: base extension cannot change any built cell
+        that already exists (the changed-cell guard), so cached features stay true."""
+        self._world.grow(region)
+        if not self._base_region.covers(region):
+            self._world.extend_base({cell: block for cell, block in cells.items()
+                                     if not self._base_region.contains(*cell)})
+            self._base_region = region
+
+    @property
+    def pending_event_ids(self) -> tuple[int, ...]:
+        """Events seen but not yet consumed by any correction — at session end these
+        are the unconsumed ids (a tick-0 action's events, or a bug). Agent events are
+        never here: they are filtered at remember()."""
+        return tuple(sorted(self._events))
+
+    @property
+    def crop_escapes(self) -> int:
+        """How many applied events fell OUTSIDE the capture region. Nonzero means the
+        build is happening where the region cannot see it — every structure feature
+        reads zero and D2 is blind. The one real session that hit this (2026-07-04,
+        region anchored at spawn, build at a teleport target) showed 92/92 escapes."""
+        return len(self._world.escaped)
+
+    def on_correction(self, correction: Evidence2D) -> Evidence3D | None:
+        """One structure record for one scored B1 record (None for context records)."""
         if not correction.scored:
-            continue
-        if cached is None:
-            built = world.built()
-            cached = {goal: _best_instance(world, goal, built) for goal in GOALS}
-            cached_global = _global_feats(world, tuple(recent_edits[-_RECENT_EDITS:]))
+            return None
+        if self._cached is None:
+            built = self._world.built()
+            self._cached = {goal: _best_instance(self._world, goal, built) for goal in GOALS}
+            self._cached_global = _global_feats(self._world, tuple(self._recent_edits))
+            # The shape embedding describes the same pre-action state, so it shares the
+            # cache: recomputed only when an event actually changed the region.
+            self._cached_h3d = self._h3d_fn(built) if self._h3d_fn is not None else None
         per_goal = {}
-        for goal, (reading, subtype) in cached.items():
-            history = comp_history[goal]
-            baseline = history[-DELTA_COMP_WINDOW] if len(history) >= DELTA_COMP_WINDOW \
-                else (history[0] if history else reading.comp)
+        for goal, (reading, subtype) in self._cached.items():
+            last = self._last_comps[goal]
+            if len(last) >= DELTA_COMP_WINDOW:
+                baseline = last[0]                       # the reading 5 corrections ago
+            else:
+                baseline = self._first_comp.get(goal, reading.comp)
             per_goal[goal] = PerGoalStructure(
                 comp=round(reading.comp, 4),
                 edit_distance=reading.edit_distance,
@@ -239,19 +343,56 @@ def build_evidence3d(
                 subtype=subtype,
                 delta_comp=round(reading.comp - baseline, 4),
             )
-            history.append(reading.comp)
-        records.append(Evidence3D(
+            self._first_comp.setdefault(goal, reading.comp)
+            last.append(reading.comp)
+        record = Evidence3D(
             tick=correction.tick_range[1] + 1,   # the scored action starts here (B1 contract)
             event_ids=correction.event_ids,
             scored=True,
             per_goal=per_goal,
-            global_feats=cached_global,
-        ))
+            global_feats=self._cached_global,
+            h3d=self._cached_h3d,
+        )
         if correction.event_ids:
+            changed = False
             for event_id in correction.event_ids:
-                event = events_by_id[event_id]
-                world.apply(event)
-                recent_edits.append((event.pos.x, event.pos.y, event.pos.z))
-            cached = None        # the region changed; the next record must recompute
-            cached_global = None
+                if event_id in self._seeded:
+                    continue           # landed during catch-up: the world already holds it
+                event = self._events.pop(event_id)   # pop: applied ids never pile up
+                self._world.apply(event)
+                self._recent_edits.append((event.pos.x, event.pos.y, event.pos.z))
+                changed = True
+            if changed:
+                self._cached = None    # the region changed; the next record must recompute
+                self._cached_global = None
+                self._cached_h3d = None
+        return record
+
+
+def build_evidence3d(
+    world: ReplayWorld,
+    corrections: tuple[Evidence2D, ...],
+    events_by_id: dict,
+    h3d_fn: Callable[[dict], "tuple[float, ...] | None"] | None = None,
+    growths: tuple = (),
+) -> list[Evidence3D]:
+    """One Evidence3D per scored correction, in order; events applied after their record.
+
+    The recording driver: seed the same machine the live path uses with the session's
+    events, then feed it every correction. `h3d_fn` (optional) is the learned shape
+    channel — see Evidence3DStream. `growths` (region v3) is (tick, region, cells)
+    triples for snapshots whose frame grew: each is adopted before the first
+    correction past its tick, mirroring when the live runner meets the file.
+    """
+    stream = Evidence3DStream(world, h3d_fn=h3d_fn)
+    stream.remember(events_by_id.values())
+    pending_growth = list(growths)
+    records: list[Evidence3D] = []
+    for correction in corrections:
+        while pending_growth and pending_growth[0][0] <= correction.tick_range[1]:
+            _, grown_region, grown_cells = pending_growth.pop(0)
+            stream.extend_world(grown_region, grown_cells)
+        record = stream.on_correction(correction)
+        if record is not None:
+            records.append(record)
     return records

@@ -54,6 +54,40 @@ def sparse_build(session_id: str = "synthetic-sparse") -> ScriptedBuild:
     return ScriptedBuild(session_id=session_id, held_item=block_type, placements=placements)
 
 
+def assisted_build(session_id: str = "synthetic-assisted") -> ScriptedBuild:
+    """A mixed-actor session: the human lays a wall row while the AGENT places three
+    blocks of its own in between (actor = the reserved agent name). The A7 fixtures'
+    home: agent events must never be scored, consumed, or counted as built evidence —
+    but the snapshot monitor's shadow world must still contain them."""
+    from ..contracts.b0 import AGENT_ACTOR
+
+    block_type = "minecraft:oak_planks"
+    human = [
+        ScriptedPlacement(tick=5 * (i + 1), pos=BlockPos(x=i, y=_ROW_Y, z=0), block_type=block_type)
+        for i in range(_ROW_LENGTH)
+    ]
+    agent = [
+        ScriptedPlacement(tick=t, pos=BlockPos(x=x, y=_ROW_Y, z=3), block_type="minecraft:stone",
+                          actor=AGENT_ACTOR)
+        for t, x in ((7, 0), (13, 1), (22, 2))   # between the human's placements
+    ]
+    placements = tuple(sorted(human + agent, key=lambda p: p.tick))
+    return ScriptedBuild(session_id=session_id, held_item=block_type, placements=placements)
+
+
+def burst_place_build(session_id: str = "synthetic-burst") -> ScriptedBuild:
+    """A placing spree longer than a second — 25 blocks on 25 consecutive ticks, one
+    unbroken PLACE run. Exercises the streaming segmenter's deferred path: the scored
+    record must wait for the run's last event id while a ~1 Hz context record comes
+    due inside the run and queues behind it."""
+    block_type = "minecraft:oak_planks"
+    placements = tuple(
+        ScriptedPlacement(tick=5 + i, pos=BlockPos(x=i, y=_ROW_Y, z=0), block_type=block_type)
+        for i in range(25)
+    )
+    return ScriptedBuild(session_id=session_id, held_item=block_type, placements=placements)
+
+
 def pen_build(session_id: str = "synthetic-pen") -> ScriptedBuild:
     """Builds the animal-pen template exactly: a 5x5 fence ring, one post at a time —
     the D2 fixture for completion reaching 1.0 and enclosure detection."""

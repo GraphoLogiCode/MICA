@@ -93,9 +93,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 // window's aspect with a 160 floor), -Dmica.livePort=N (default 25567).
 //
 // The status overlay (F8) shows live capture health and is OFF by default; frame capture
-// pauses while it is on, so it can never reach the saved/streamed frames. Recording
-// pauses/resumes with F9 (pauses the live feed too); paused ticks write nothing and hold
-// the counter, so the recording stays gap-free.
+// pauses while it is on, so it can never reach the saved/streamed frames.
+//
+// There is deliberately NO pause key (0.0.5). The old F9 pause dropped block events for
+// changes made while paused and held the tick counter, so the recording LOOKED gap-free
+// while the world silently moved on without evidence — one accidental press (F9 sat next
+// to F8, with no banner unless the HUD was open) cost a real session its structure
+// evidence, permanently. Recording runs whenever a world is open; to stop capturing,
+// quit the world — that is a clean session end.
 public class B0CaptureClient implements ClientModInitializer {
     public static final Logger LOGGER = LogManager.getLogger("mica_b0");
 
@@ -108,11 +113,25 @@ public class B0CaptureClient implements ClientModInitializer {
     // Region snapshots wait for this many event-free ticks (2 s) so the client's copy
     // of the world has settled — right after a change it can trail the server by a tick.
     private static final int QUIESCENT_TICKS = 40;
-    // The snapshot box around the player's starting spot. Builds are capped to roughly
-    // 16x16x16 (the D2 templates), so radius 24 leaves room to wander while placing.
+    // The snapshot box around the player. Builds are capped to roughly 16x16x16
+    // (the D2 templates), so radius 24 leaves room to wander while placing.
     private static final int REGION_RADIUS_DEFAULT = 24;   // horizontal, blocks
     private static final int REGION_BELOW = 16;            // how far under the feet to include
     private static final int REGION_ABOVE = 32;            // headroom for towers
+    // Until the first block change, the region FOLLOWS the player: it re-centers when
+    // they move more than this far from the current anchor (a real session anchored at
+    // the spawn while the player teleported away to build — every event then fell
+    // outside the box and the structure stream was blind for the whole session).
+    private static final int REANCHOR_BLOCKS = 8;
+    // Region v3 (0.0.6): after the freeze the box GROWS toward the player. Two real
+    // sessions were voided by a stray first block pinning the box away from the
+    // build; growth (never moving, never shrinking) admits new territory with its
+    // base snapshotted BEFORE the player can build there. -Dmica.regionGrow=0 opts out.
+    private static final int GROW_MARGIN = 8;          // grow when the player is this close to a face
+    private static final int GROW_STEP = 16;           // how far past the player each face extends
+    private static final int GROW_COOLDOWN_TICKS = 40; // at most one growth per 2 s
+    private static final int GROW_QUIET_TICKS = 5;     // short quiet so the compare misses the trailing tick
+    private static final int GROW_MAX_DIMENSION = 145; // past this, escapes resume being the signal
 
     // The mixin (server thread) needs a path to the running mod instance.
     private static volatile B0CaptureClient INSTANCE;
@@ -120,9 +139,7 @@ public class B0CaptureClient implements ClientModInitializer {
     private volatile BufferedWriterState state;   // read on the server thread (block events) too
     private volatile LiveStream live;             // read on the frame-writer thread too
     private KeyMapping toggleHud;
-    private KeyMapping toggleRecording;
     private boolean hudVisible = false;
-    private volatile boolean recording = true;   // F9 pauses/resumes; starts on so nothing is lost
 
     @Override
     public void onInitializeClient() {
@@ -132,8 +149,6 @@ public class B0CaptureClient implements ClientModInitializer {
         live = openLiveStream();
         toggleHud = KeyBindingHelper.registerKeyBinding(new KeyMapping(
                 "key.mica.toggle_hud", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_F8, "category.mica"));
-        toggleRecording = KeyBindingHelper.registerKeyBinding(new KeyMapping(
-                "key.mica.toggle_recording", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_F9, "category.mica"));
         ClientTickEvents.END_CLIENT_TICK.register(this::onClientTick);
         ClientLifecycleEvents.CLIENT_STOPPING.register(this::onClientStopping);
         HudRenderCallback.EVENT.register((poseStack, tickDelta) -> drawHud(poseStack));
@@ -162,10 +177,15 @@ public class B0CaptureClient implements ClientModInitializer {
         // With the authoritative place mixin the hooks see every ordinary placement, and
         // the final arbiter of "nothing missed" is D2's replay-vs-snapshot check.
         final AtomicInteger eventCounter = new AtomicInteger(0);
-        // Region snapshots (D2 ground truth). The box is fixed on the first in-world
-        // tick, around wherever the player starts.
+        // Region snapshots (D2 ground truth). The box first anchors wherever the player
+        // is, FOLLOWS them while nothing has been built (re-anchoring as they move),
+        // and freezes for good at the first block change — so it frames the BUILD,
+        // not the spawn point.
         Path snapshotsDir;
         int[] snapshotRegion;               // {x0, y0, z0, x1, y1, z1}, inclusive
+        boolean regionFrozen = false;       // set at the first recorded block change
+        int lastBaseTick = -1;              // tick of the current provisional base snapshot
+        int lastGrowTick = 0;               // tick of the last grow-only expansion (region v3)
         int quietTicks = 0;                 // ticks since the last recorded block event
         int eventsSinceSnapshot = 0;
         int snapshotCount = 0;
@@ -227,7 +247,7 @@ public class B0CaptureClient implements ClientModInitializer {
 
     // Called from the server thread; the per-tick drain (client thread) reads the queue.
     private void recordEvent(int x, int y, int z, String blockType, String op, String actor) {
-        if (state == null || !recording) return;   // drop block changes made while paused
+        if (state == null) return;
         JsonObject ev = new JsonObject();
         ev.addProperty("event_id", state.eventCounter.getAndIncrement());
         JsonArray pos = new JsonArray();
@@ -244,12 +264,8 @@ public class B0CaptureClient implements ClientModInitializer {
     private void onClientTick(Minecraft client) {
         if (state == null) return;
         while (toggleHud.consumeClick()) hudVisible = !hudVisible;        // show/hide the overlay
-        boolean wasRecording = recording;
-        while (toggleRecording.consumeClick()) recording = !recording;    // pause/resume capture
-        boolean justPaused = wasRecording && !recording;                  // record one last tick to flush
         LocalPlayer player = client.player;
         if (player == null || client.level == null) return;  // only record while in a world
-        if (!recording && !justPaused) return;               // paused: write nothing, hold the counter
         final int t = state.tick++;
         long now = System.currentTimeMillis();
 
@@ -299,12 +315,43 @@ public class B0CaptureClient implements ClientModInitializer {
     // Take the first snapshot as soon as we know where the player is, then one after
     // each building burst — at a quiet moment, so the client's world copy has settled
     // and every event already drained into a packet belongs strictly before it.
+    //
+    // Until the first block change the region is PROVISIONAL: it follows the player
+    // (re-centering when they move more than REANCHOR_BLOCKS from the anchor, at most
+    // once per QUIESCENT_TICKS), and each re-anchor rewrites the base snapshot — which
+    // stays strictly pre-action by construction, because no event exists yet. The
+    // first recorded block change freezes the region where the builder actually is.
     private void maybeSnapshot(Minecraft client, LocalPlayer player, int tick, int eventsThisTick) {
         if (state.snapshotRegion == null) {
             initSnapshotRegion(player);
             writeSnapshot(client, tick);
+            state.lastBaseTick = tick;
             return;
         }
+        if (!state.regionFrozen && state.eventCounter.get() > 0) {
+            state.regionFrozen = true;
+            pruneProvisionalSnapshots();   // only the final region's base remains
+            LOGGER.info("[MICA] snapshot region FROZEN at the first build: "
+                    + java.util.Arrays.toString(state.snapshotRegion));
+        }
+        if (!state.regionFrozen) {
+            int px = (int) Math.floor(player.getX());
+            int pz = (int) Math.floor(player.getZ());
+            int cx = (state.snapshotRegion[0] + state.snapshotRegion[3]) / 2;
+            int cz = (state.snapshotRegion[2] + state.snapshotRegion[5]) / 2;
+            long dx = px - cx;
+            long dz = pz - cz;
+            boolean moved = dx * dx + dz * dz > (long) REANCHOR_BLOCKS * REANCHOR_BLOCKS;
+            if (moved && tick - state.lastBaseTick >= QUIESCENT_TICKS) {
+                int staleBase = state.lastBaseTick;
+                initSnapshotRegion(player);            // re-center + persist to manifest
+                deleteSnapshotFile(staleBase);         // keep one provisional base at a time
+                writeSnapshot(client, tick);
+                state.lastBaseTick = tick;
+            }
+            return;   // no burst snapshots while provisional — nothing was built yet
+        }
+        maybeGrowRegion(client, player, tick, eventsThisTick);
         if (eventsThisTick > 0) {
             state.quietTicks = 0;
             state.eventsSinceSnapshot += eventsThisTick;
@@ -316,6 +363,80 @@ public class B0CaptureClient implements ClientModInitializer {
         }
     }
 
+    // Region v3 (0.0.6): the frozen box follows the builder by GROWING — never moving,
+    // never shrinking, so no existing cell's base or coordinate frame ever changes.
+    // When the player comes within GROW_MARGIN of a face (or stands beyond it), the
+    // crossed faces extend GROW_STEP past them, the manifest is rewritten (it always
+    // carries the CURRENT box), and the enlarged region is snapshotted IMMEDIATELY:
+    // that file is both a comparison point for the old cells and the pre-build BASE
+    // for the adopted ones — captured before the player can build there, which is
+    // exactly what the margin buys. A short quiet requirement keeps the comparison
+    // off the trailing tick right after a change; the size cap returns escapes as
+    // the honest signal for a build no box should chase.
+    private void maybeGrowRegion(Minecraft client, LocalPlayer player, int tick, int eventsThisTick) {
+        if (!"1".equals(System.getProperty("mica.regionGrow", "1"))) return;
+        if (eventsThisTick > 0 || state.quietTicks < GROW_QUIET_TICKS) return;
+        if (tick - state.lastGrowTick < GROW_COOLDOWN_TICKS) return;
+        int[] r = state.snapshotRegion;
+        int px = (int) Math.floor(player.getX());
+        int py = (int) Math.floor(player.getY());
+        int pz = (int) Math.floor(player.getZ());
+        int[] g = java.util.Arrays.copyOf(r, 6);
+        if (px - r[0] < GROW_MARGIN) g[0] = Math.min(g[0], px - GROW_STEP);
+        if (r[3] - px < GROW_MARGIN) g[3] = Math.max(g[3], px + GROW_STEP);
+        if (pz - r[2] < GROW_MARGIN) g[2] = Math.min(g[2], pz - GROW_STEP);
+        if (r[5] - pz < GROW_MARGIN) g[5] = Math.max(g[5], pz + GROW_STEP);
+        if (py - r[1] < GROW_MARGIN) g[1] = Math.max(0, Math.min(g[1], py - GROW_STEP));
+        if (r[4] - py < GROW_MARGIN) g[4] = Math.min(255, Math.max(g[4], py + GROW_STEP));
+        // per-axis cap: a capped axis keeps its old faces and escapes stay honest there
+        if (g[3] - g[0] + 1 > GROW_MAX_DIMENSION) { g[0] = r[0]; g[3] = r[3]; }
+        if (g[5] - g[2] + 1 > GROW_MAX_DIMENSION) { g[2] = r[2]; g[5] = r[5]; }
+        if (g[4] - g[1] + 1 > GROW_MAX_DIMENSION) { g[1] = r[1]; g[4] = r[4]; }
+        if (java.util.Arrays.equals(g, r)) return;
+        state.snapshotRegion = g;
+        state.lastGrowTick = tick;
+        writeManifest(state, -1);          // the manifest always carries the CURRENT box
+        writeSnapshot(client, tick);       // the adopted cells' base, captured pre-build
+        LOGGER.info("[MICA] region grew: " + java.util.Arrays.toString(r)
+                + " -> " + java.util.Arrays.toString(g));
+    }
+
+    // On freeze: drop every snapshot file except the current base, so snapshots/ only
+    // ever holds frames of the FINAL region (the replay check reads the folder blind).
+    private void pruneProvisionalSnapshots() {
+        try {
+            java.io.File[] files = state.snapshotsDir.toFile().listFiles();
+            if (files == null) return;
+            String keep = state.lastBaseTick + ".json";
+            for (java.io.File file : files) {
+                if (file.getName().endsWith(".json") && !file.getName().equals(keep)) {
+                    final Path stale = file.toPath();
+                    state.frameWriter.submit(() -> {   // after any queued write finishes
+                        try {
+                            Files.deleteIfExists(stale);
+                        } catch (IOException e) {
+                            LOGGER.error("[MICA] stale snapshot delete failed", e);
+                        }
+                    });
+                }
+            }
+        } catch (Throwable e) {
+            LOGGER.error("[MICA] snapshot prune failed", e);
+        }
+    }
+
+    private void deleteSnapshotFile(int tick) {
+        if (tick < 0) return;
+        final Path stale = state.snapshotsDir.resolve(tick + ".json");
+        state.frameWriter.submit(() -> {
+            try {
+                Files.deleteIfExists(stale);
+            } catch (IOException e) {
+                LOGGER.error("[MICA] stale snapshot delete failed", e);
+            }
+        });
+    }
+
     private void initSnapshotRegion(LocalPlayer player) {
         int radius = Math.max(8, Integer.getInteger("mica.snapshotRadius", REGION_RADIUS_DEFAULT));
         int px = (int) Math.floor(player.getX());
@@ -325,7 +446,8 @@ public class B0CaptureClient implements ClientModInitializer {
                 px - radius, Math.max(0, py - REGION_BELOW), pz - radius,
                 px + radius, Math.min(255, py + REGION_ABOVE), pz + radius};
         writeManifest(state, -1);   // the box defines every snapshot's frame; persist it now, crash or not
-        LOGGER.info("[MICA] snapshot region fixed: " + java.util.Arrays.toString(state.snapshotRegion));
+        LOGGER.info("[MICA] snapshot region anchored (provisional until first build): "
+                + java.util.Arrays.toString(state.snapshotRegion));
     }
 
     // Read the whole box on the client thread (a ~100k-cell read costs ~10 ms — felt as
@@ -472,7 +594,7 @@ public class B0CaptureClient implements ClientModInitializer {
     // Colour code, kept consistent so it's never ambiguous:
     //   green  = healthy / recording / frames flowing
     //   red    = NOT recording (capture failed to open) — the only thing red ever means
-    //   yellow = paused or warming up (a menu is open, or no frame written yet) — expected
+    //   yellow = warming up (a menu is open, or no frame written yet) — expected
     //   grey   = plain numbers
     private void drawHud(PoseStack poseStack) {
         if (!hudVisible) return;
@@ -488,11 +610,7 @@ public class B0CaptureClient implements ClientModInitializer {
             return;
         }
 
-        if (recording) {
-            font.drawShadow(poseStack, "MICA B0  RECORDING", x, y, 0x55FF55);   // green = writing
-        } else {
-            font.drawShadow(poseStack, "MICA B0  PAUSED (F9)", x, y, 0xFFFF55);  // yellow = paused
-        }
+        font.drawShadow(poseStack, "MICA B0  RECORDING", x, y, 0x55FF55);   // green = writing
         y += step;
         font.drawShadow(poseStack, "tick " + state.tick, x, y, 0xFFFFFF);
         y += step;
@@ -502,6 +620,16 @@ public class B0CaptureClient implements ClientModInitializer {
         font.drawShadow(poseStack, "block events " + state.eventCounter.get(), x, y, 0xFFFFFF);
         y += step;
         font.drawShadow(poseStack, "snapshots " + state.snapshotCount, x, y, 0xFFFFFF);
+        y += step;
+        if (state.snapshotRegion == null) {
+            font.drawShadow(poseStack, "region waiting", x, y, 0xFFFF55);
+        } else if (state.regionFrozen) {
+            font.drawShadow(poseStack, "region fixed", x, y, 0x55FF55);
+        } else {
+            int cx = (state.snapshotRegion[0] + state.snapshotRegion[3]) / 2;
+            int cz = (state.snapshotRegion[2] + state.snapshotRegion[5]) / 2;
+            font.drawShadow(poseStack, "region follows you @(" + cx + "," + cz + ")", x, y, 0xFFFF55);
+        }
         y += step;
         int liveColor = (live != null && live.hasConsumer()) ? 0x55FF55 : 0xAAAAAA;
         font.drawShadow(poseStack, "live " + (live == null ? "off" : live.hasConsumer() ? "connected" : "waiting"), x, y, liveColor);
@@ -572,7 +700,7 @@ public class B0CaptureClient implements ClientModInitializer {
         m.addProperty("session_id", st.sessionId);
         m.addProperty("session_start_ms", st.sessionStartMs);
         m.addProperty("mc_version", "1.16.5");
-        m.addProperty("mod_version", "fabric-b0-0.0.3");
+        m.addProperty("mod_version", "fabric-b0-0.0.6");   // 0.0.6: grow-only region (v3) — the box follows the builder
         m.addProperty("event_schema_version", "1");   // B0 block-event schema version (jsonl_ingest reads this)
         // The frame settings this recording ran with — two captures with different
         // settings must be tellable apart from their manifests alone.

@@ -2,6 +2,9 @@
 
     python scripts/run_d2.py [session.jsonl]
     flags: --allow-ungated    consume a session even if it fails the B0 gate (debugging only)
+           --h3d              also fill each record's h3d with the frozen Uni3D shape
+                              embedding of the pre-action build (GPU; see shape3d.py)
+           --overwrite        replace an existing h3d-enriched evidence3d.jsonl
 
 The session must PASS the B0 gate AND carry region snapshots (mod 0.0.3+), because the
 replay check is what earns the right to trust the voxel state. Order of proof:
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import dataclasses
 import glob
+import hashlib
 import json
 import os
 import sys
@@ -26,11 +30,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 from mica.capture.discovery import newest_capture                    # noqa: E402
 from mica.capture.jsonl_ingest import JsonlSource                    # noqa: E402
 from mica.contracts.b2 import ROTATIONS                              # noqa: E402
+from mica.contracts.serialize import evidence3d_to_dict              # noqa: E402
 from mica.perception.evidence2d import evidence_stream               # noqa: E402
 from mica.perception.evidence3d import DELTA_COMP_WINDOW, build_evidence3d   # noqa: E402
 from mica.perception.templates import TEMPLATE_SET_VERSION, TEMPLATES  # noqa: E402
 from mica.perception.voxel_replay import (                           # noqa: E402
-    TAXONOMY_VERSION, ReplayWorld, compare_to_snapshot, load_snapshot, region_from_manifest,
+    TAXONOMY_VERSION, ReplayWorld, SnapshotMonitor, load_snapshot, region_from_manifest,
 )
 from mica.validation.b0_gate import gate_checks                      # noqa: E402
 from mica.validation.evidence3d_check import check_join, check_stream  # noqa: E402
@@ -39,52 +44,49 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RAW = os.path.join(_ROOT, "capture", "raw")
 
 
-def _record_to_dict(record) -> dict:
-    g = record.global_feats
-    return {
-        "tick": record.tick,
-        "event_ids": list(record.event_ids),
-        "scored": record.scored,
-        "per_goal": {
-            goal: {
-                "comp": feats.comp, "edit_distance": feats.edit_distance, "fit": feats.fit,
-                "pose": {"dx": feats.pose.dx, "dz": feats.pose.dz, "rot": feats.pose.rot},
-                "subtype": feats.subtype,
-                "delta_comp": feats.delta_comp,
-            }
-            for goal, feats in record.per_goal.items()
-        },
-        "global": {
-            "built_count": g.built_count, "bbox": list(g.bbox) if g.bbox else None,
-            "centroid": list(g.centroid) if g.centroid else None,
-            "planar_runs": g.planar_runs, "has_enclosure": g.has_enclosure,
-            "symmetry": g.symmetry, "symmetry_support": g.symmetry_support,
-            "edit_locality": g.edit_locality,
-        },
-        "voxel_patch": None,   # recomputable by replay; materialized when D3 trains the encoder
-        "h3d": None,
-    }
+def _existing_has_h3d(path: str) -> bool:
+    """True when an evidence file on disk already carries GPU-computed h3d embeddings."""
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip() and json.loads(line).get("h3d") is not None:
+                return True
+    return False
 
 
-def _replay_and_verify(session, snapshot_paths, world):
-    """Apply events between snapshots and collect every divergence, tagged by class."""
+def _sha256(path: str) -> str:
+    if not os.path.exists(path):
+        return "missing"
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _replay_and_verify(session, snapshot_paths, monitor):
+    """Apply events between snapshots and collect every divergence, tagged by class.
+
+    The monitor owns the shadow world and the comparison; this loop just walks a
+    finished recording — the live runner drives the same monitor per packet instead.
+    Region v3: each file carries its own frame; the frame widens BEFORE its events
+    apply (so events in freshly grown territory are judged in-frame), and the file's
+    view of the new territory becomes the adopted base inside on_snapshot."""
     events = sorted((event for packet in session.packets for event in packet.server.block_events),
                     key=lambda event: event.event_id)
     event_tick = {event.event_id: packet.tick for packet in session.packets
                   for event in packet.server.block_events}
-    divergences = []
     applied = 0
     for path in snapshot_paths[1:]:
-        snap_tick, _, cells = load_snapshot(path)
+        snap_tick, snap_region, cells = load_snapshot(path)
+        monitor.notice_region(snap_region)
         while applied < len(events) and event_tick[events[applied].event_id] <= snap_tick:
-            world.apply(events[applied])
+            monitor.apply_event(events[applied])
             applied += 1
-        for divergence in compare_to_snapshot(world, cells):
-            divergences.append((snap_tick, divergence))
+        monitor.on_snapshot(snap_tick, cells, snap_region)
     while applied < len(events):   # events after the last snapshot still shape the features
-        world.apply(events[applied])
+        monitor.apply_event(events[applied])
         applied += 1
-    return divergences
+    return monitor.divergences
 
 
 def main() -> int:
@@ -110,49 +112,79 @@ def main() -> int:
     snap_dir = os.path.join(capture_dir, session.manifest.session_id, "snapshots")
     snapshot_paths = sorted(glob.glob(os.path.join(snap_dir, "*.json")),
                             key=lambda p: int(os.path.basename(p)[:-5]))
-    _, _, base_cells = load_snapshot(snapshot_paths[0])
-    world = ReplayWorld(region, base_cells)
+    # Seed from the base file's OWN frame (region v3: the manifest carries the
+    # final, possibly grown box; growth is re-adopted snapshot by snapshot).
+    _, base_region, base_cells = load_snapshot(snapshot_paths[0])
+    monitor = SnapshotMonitor(base_region, base_cells)
 
     print(f"D2  {os.path.basename(jsonl)}")
-    divergences = _replay_and_verify(session, snapshot_paths, world)
-    by_class = {"a": [], "b": [], "c": []}
-    for snap_tick, div in divergences:
-        by_class[div.taxonomy_class].append((snap_tick, div))
+    divergences = _replay_and_verify(session, snapshot_paths, monitor)
+    counts = monitor.class_counts   # exact totals; `divergences` holds the first examples
     report = {
         "session_id": session.manifest.session_id,
         "divergence_taxonomy_version": TAXONOMY_VERSION,
         "snapshots_compared": len(snapshot_paths) - 1,
+        "divergence_counts": dict(counts),
         "divergences": [
             {"snapshot_tick": t, "cell": list(d.cell), "replay": d.replay_block,
              "world": d.world_block, "class": d.taxonomy_class}
             for t, d in divergences
         ],
-        "crop_escapes": len(world.escaped),
-        "quarantined": bool(by_class["c"]) or bool(world.escaped),
+        "divergence_examples_capped": monitor.divergence_count > len(divergences),
+        "crop_escapes": len(monitor.world.escaped),
+        "quarantined": monitor.quarantined,
     }
     report_path = jsonl.replace(".jsonl", ".voxel_replay_report.json")
     with open(report_path, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
     print(f"  replay: {len(snapshot_paths) - 1} snapshots compared; divergences"
-          f" a={len(by_class['a'])} b={len(by_class['b'])} c={len(by_class['c'])};"
-          f" crop escapes {len(world.escaped)}  ->  {os.path.basename(report_path)}")
+          f" a={counts['a']} b={counts['b']} c={counts['c']};"
+          f" crop escapes {len(monitor.world.escaped)}  ->  {os.path.basename(report_path)}")
     if report["quarantined"]:
         print("  [FAIL] replay check - session QUARANTINED (class-c divergence or crop escape)")
         return 1
     print("  [PASS] replay check (all divergences in documented classes)")
 
     # The features must see the same predict-observe-correct order the tracker will, so
-    # rebuild the world from the base and interleave corrections with their own events.
+    # rebuild the world from the base and interleave corrections with their own events —
+    # and (region v3) with the growth snapshots, so built-vs-terrain stays exact in
+    # territory the frame adopted mid-session.
     corrections = tuple(r for r in evidence_stream(session.packets) if r.scored)
     events_by_id = {event.event_id: event for packet in session.packets
                     for event in packet.server.block_events}
-    fresh_world = ReplayWorld(region, base_cells)
-    records = build_evidence3d(fresh_world, corrections, events_by_id)
+    fresh_world = ReplayWorld(base_region, dict(base_cells))
+    growths = []
+    for path in snapshot_paths[1:]:
+        snap_tick, snap_region, cells = load_snapshot(path)
+        if snap_region != base_region and (not growths or snap_region != growths[-1][1]):
+            growths.append((snap_tick, snap_region, cells))
 
     out = jsonl.replace(".jsonl", ".evidence3d.jsonl")
+    h3d_fn = None
+    if "--h3d" in sys.argv:
+        from mica.perception.shape3d import Uni3DShapeHead, assets_ready
+
+        ready, missing = assets_ready()
+        if not ready:
+            print(f"  REFUSED: --h3d needs the Uni3D assets ({missing}); run scripts/setup_uni3d.py")
+            return 1
+        print("  loading frozen Uni3D-B on GPU ...")
+        h3d_fn = Uni3DShapeHead().h3d
+    elif os.path.exists(out) and _existing_has_h3d(out) and "--overwrite" not in sys.argv:
+        print(f"  REFUSED: {os.path.basename(out)} already carries GPU h3d embeddings; a plain"
+              " run would erase them. Rerun with --h3d, or --overwrite to discard them.")
+        return 1
+
+    records = build_evidence3d(fresh_world, corrections, events_by_id, h3d_fn=h3d_fn,
+                               growths=tuple(growths))
+
     with open(out, "w", encoding="utf-8") as handle:
         for record in records:
-            handle.write(json.dumps(_record_to_dict(record)) + "\n")
+            handle.write(json.dumps(evidence3d_to_dict(record)) + "\n")
+    if h3d_fn is not None:
+        filled = sum(1 for record in records if record.h3d is not None)
+        width = next((len(record.h3d) for record in records if record.h3d is not None), 0)
+        print(f"  h3d: {filled}/{len(records)} records carry uni3d({width})")
     # Rank fit-first (player-anchored), comp as tiebreak — the same call the structure-only
     # baseline makes. comp alone can be inflated by terrain, which satisfies cells by design.
     final_top = max(records[-1].per_goal.items(),
@@ -173,6 +205,14 @@ def main() -> int:
         "rotations": list(ROTATIONS),
         "delta_comp_window": DELTA_COMP_WINDOW,
         "divergence_taxonomy_version": TAXONOMY_VERSION,
+        # The learned shape channel, when enabled: changing the checkpoint, cloud
+        # construction, or seed silently changes every future h3d — pin them.
+        "h3d_source": None if h3d_fn is None else {
+            "encoder": "uni3d-b.pt",
+            "encoder_sha256": _sha256(os.path.join(_ROOT, "models", "uni3d-b.pt")),
+            "cloud_points": 4096,
+            "cloud_seed": 0,
+        },
     }
     prov_path = jsonl.replace(".jsonl", ".d2_provenance.json")
     with open(prov_path, "w", encoding="utf-8") as handle:

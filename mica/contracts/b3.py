@@ -107,5 +107,6 @@ def fuse_dicts(b1: dict, b2: dict) -> FusedEvidence:
             symmetry=g["symmetry"], symmetry_support=g["symmetry_support"],
             edit_locality=g["edit_locality"],
         ),
+        h3d=tuple(b2["h3d"]) if b2.get("h3d") else None,
     )
     return fuse(typed_b1, typed_b2)

@@ -117,6 +117,48 @@ def test_heads_honor_the_constraints():
     assert like[("production", 0)] > like[("decorative", 0)]
 
 
+def test_action_count_matches_the_heads_action_set():
+    # the likelihood floor eps/|A| and the humility bound M both depend on |A|; if
+    # SCAFFOLD is ever unfolded into its own class, both constants must move with the
+    # action set — this coupling is what keeps them honest (review 12-F5)
+    assert _P.action_count == len(ACTIONS)
+
+
+def test_action_count_matches_the_heads_action_set():
+    # the likelihood floor eps/|A| and the humility bound M both depend on |A|; if
+    # SCAFFOLD is ever unfolded into its own class, both constants must move with the
+    # action set — this coupling is what keeps them honest (review 12-F5)
+    assert _P.action_count == len(ACTIONS)
+
+
+def test_action_count_matches_the_heads_action_set():
+    # the likelihood floor eps/|A| and the humility bound M both depend on |A|; if
+    # SCAFFOLD is ever unfolded into its own class, both constants must move with the
+    # action set — this coupling is what keeps them honest (review 12-F5)
+    assert _P.action_count == len(ACTIONS)
+
+
+def test_action_count_matches_the_heads_action_set():
+    # the likelihood floor eps/|A| and the humility bound M both depend on |A|; if
+    # SCAFFOLD is ever unfolded into its own class, both constants must move with the
+    # action set — this coupling is what keeps them honest (review 12-F5)
+    assert _P.action_count == len(ACTIONS)
+
+
+def test_action_count_matches_the_heads_action_set():
+    # the likelihood floor eps/|A| and the humility bound M both depend on |A|; if
+    # SCAFFOLD is ever unfolded into its own class, both constants must move with the
+    # action set — this coupling is what keeps them honest (review 12-F5)
+    assert _P.action_count == len(ACTIONS)
+
+
+def test_action_count_matches_the_heads_action_set():
+    # the likelihood floor eps/|A| and the humility bound M both depend on |A|; if
+    # SCAFFOLD is ever unfolded into its own class, both constants must move with the
+    # action set — this coupling is what keeps them honest (review 12-F5)
+    assert _P.action_count == len(ACTIONS)
+
+
 def test_the_d1_wire_is_load_bearing():
     # the held fence is production evidence the structure stream cannot see: with it,
     # production's PLACE likelihood beats the same evidence holding a generic block

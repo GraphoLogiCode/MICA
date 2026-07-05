@@ -32,6 +32,7 @@ import math
 from ..contracts.b1 import GOALS, MacroAction
 from ..contracts.b3 import FusedEvidence
 from ..perception.templates import REQ_SOLID, TEMPLATES
+from . import h3d_readout
 from .tracker import Belief
 
 # The emitted macro-action classes (SCAFFOLD folds into PLACE in v1) — |A| = 5.
@@ -42,6 +43,8 @@ _PROGRESS_GAIN = 3.0
 _BUMP_PROGRESS = 1.0
 _BUMP_ANCHOR = 1.6
 _BUMP_MATERIAL = 0.8    # the hand holds a style-signature block (fences, poppies, ...)
+_H3D_WEIGHT = 1.0       # learned Uni3D shape readout, centered + anchoring-gated
+                        # (probe_h3d_fusion measures it; see the gate note in deliberative)
 _SGOAL_WEIGHT = 1.5
 _STREAK_WEIGHT = 0.8    # recent placing predicts more placing — goal-free, both heads
 _DWELL_WEIGHT = 0.3     # a fixated crosshair leans toward acting on the spot
@@ -117,6 +120,21 @@ def deliberative(evidence: FusedEvidence, goal: str) -> dict:
     anchored = feats.fit * feats.comp
     bump = (_BUMP_PROGRESS * progress + _BUMP_ANCHOR * anchored
             + _BUMP_MATERIAL * _material_match(evidence, goal))
+    shape = h3d_readout.scores(evidence.h3d)
+    if shape is not None:
+        # The learned Uni3D shape readout — what the geometry itself says the build is
+        # becoming. g-indexed (trained on goal labels), so deliberative-only; CENTERED
+        # so it is zero-sum across goals: it discriminates between goals and cannot
+        # shift the base action rates (the balance law).
+        #
+        # Its measured reliability window (h3d_linear_probe.json) sets two goal-free
+        # gates: near-chance on the smallest clouds (0.3 at the 10% bin — a couple of
+        # blocks say nothing), so it ramps IN with built size; and it trails once a
+        # template locks on late, so it fades OUT as the best fit x comp anchors.
+        # Both scalars are the same for every g, so the zero-sum property survives.
+        ramp_in = min(1.0, evidence.global_feats.built_count / 8.0)
+        unanchored = 1.0 - max(f.fit * f.comp for f in evidence.per_goal.values())
+        bump += _H3D_WEIGHT * ramp_in * unanchored * (shape[goal] - 1.0 / len(GOALS))
     # The placing streak is goal-free, so it may not shift the base rate (balance law);
     # its legal role is a gain control — mid-burst, the structure evidence is more
     # diagnostic of what the burst is building. Applied uniformly across g.

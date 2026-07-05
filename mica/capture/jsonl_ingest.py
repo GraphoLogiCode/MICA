@@ -95,13 +95,18 @@ def _server(raw) -> ServerObservation:
     )
 
 
-def _packet(raw) -> ObservationPacket:
+def packet_from_dict(raw) -> ObservationPacket:
+    """One captured moment from its JSON form — the same shape whether the line came
+    from a recording on disk or straight off the live socket, so both readers share it."""
     return ObservationPacket(
         tick=int(raw["tick"]),
         wallclock_ms=int(raw["wallclock_ms"]),
         client=_client(raw["client"]),
         server=_server(raw["server"]),
     )
+
+
+_packet = packet_from_dict   # the old private name, kept so existing callers don't move
 
 
 @dataclass(frozen=True)

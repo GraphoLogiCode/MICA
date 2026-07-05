@@ -94,7 +94,12 @@ class Evidence3D:
       global_feats GlobalStructure    goal-symmetric, shared.
       voxel_patch None in v1          recomputable from raw logs by replay (Prop 1); it is
                                       materialized only when D3 trains the voxel encoder.
-      h3d         None in v1          zero-filled/absent identically across arms; d3 is D3's.
+      h3d         tuple|None          the build's dense shape embedding — frozen Uni3D over the
+                                      pre-action player-built cells (1024-dim; produced when D2
+                                      runs with a shape head, 2026-07-03) — or None when nothing
+                                      is built yet or the head is off. Identical across arms
+                                      (frontend channel); g-indexed READOUTS of it are
+                                      deliberative-only.
     """
 
     tick: int

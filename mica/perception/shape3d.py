@@ -149,6 +149,16 @@ class Uni3DShapeHead:
             feats = feats / feats.norm(dim=-1, keepdim=True)
         return feats.squeeze(0).float()
 
+    def h3d(self, built: dict, seed: int = 0) -> tuple[float, ...] | None:
+        """embed() as the plain float tuple the B2 contract carries (None when nothing
+        is built) — the exact shape of Evidence3D.h3d, so pipeline code that must stay
+        torch-free can take this method as its `h3d_fn` without seeing a tensor.
+        Seed 0 is the pipeline's fixed cloud seed (recorded in d2 provenance)."""
+        feats = self.embed(built, seed)
+        if feats is None:
+            return None
+        return tuple(feats.cpu().tolist())
+
     def score(self, built: dict, seed: int = 0) -> tuple[float, ...] | None:
         """Per-category cosine in CLIP space for the current build; None when empty.
         Kept as the probe's measurement head — it failed the fusion gate (see module

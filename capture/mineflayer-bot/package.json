@@ -1,0 +1,17 @@
+{
+  "name": "mica-capture-bot",
+  "version": "0.0.1",
+  "private": true,
+  "description": "mineflayer observer bot: logs the server half of B0 (block changes, positions, held item) to raw JSONL.",
+  "scripts": {
+    "start": "node bot.js",
+    "agent": "node agent.js",
+    "lan": "node lan_autostart.js"
+  },
+  "dependencies": {
+    "canvas": "^3.2.3",
+    "mineflayer": "^4.37.1",
+    "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-viewer": "^1.33.0"
+  }
+}

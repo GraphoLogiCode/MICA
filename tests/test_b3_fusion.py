@@ -42,6 +42,84 @@ def test_held_item_reaches_the_evidence():
     assert fused.state_feats.held_item == "minecraft:oak_fence"
 
 
+def test_a_hat_conf_never_reaches_the_filter():
+    # rule-certainty metadata may not multiply into likelihoods (D3 constraint N1).
+    # The B3 contract enforces this by omission — fusion drops the field — so two B1
+    # records differing only in a_hat_conf fuse identically and score identically,
+    # and no head can ever read it (review 12-F5).
+    from mica.intent.heads_v0 import likelihood
+
+    b1, b2 = next((a, b) for a, b in _pairs() if a.event_ids)
+    doctored = dataclasses.replace(b1, a_hat_conf=0.123)
+    assert fuse(b1, b2) == fuse(doctored, b2)
+    assert likelihood(fuse(b1, b2), b1.a_hat) == likelihood(fuse(doctored, b2), b1.a_hat)
+
+
+def test_a_hat_conf_never_reaches_the_filter():
+    # rule-certainty metadata may not multiply into likelihoods (D3 constraint N1).
+    # The B3 contract enforces this by omission — fusion drops the field — so two B1
+    # records differing only in a_hat_conf fuse identically and score identically,
+    # and no head can ever read it (review 12-F5).
+    from mica.intent.heads_v0 import likelihood
+
+    b1, b2 = next((a, b) for a, b in _pairs() if a.event_ids)
+    doctored = dataclasses.replace(b1, a_hat_conf=0.123)
+    assert fuse(b1, b2) == fuse(doctored, b2)
+    assert likelihood(fuse(b1, b2), b1.a_hat) == likelihood(fuse(doctored, b2), b1.a_hat)
+
+
+def test_a_hat_conf_never_reaches_the_filter():
+    # rule-certainty metadata may not multiply into likelihoods (D3 constraint N1).
+    # The B3 contract enforces this by omission — fusion drops the field — so two B1
+    # records differing only in a_hat_conf fuse identically and score identically,
+    # and no head can ever read it (review 12-F5).
+    from mica.intent.heads_v0 import likelihood
+
+    b1, b2 = next((a, b) for a, b in _pairs() if a.event_ids)
+    doctored = dataclasses.replace(b1, a_hat_conf=0.123)
+    assert fuse(b1, b2) == fuse(doctored, b2)
+    assert likelihood(fuse(b1, b2), b1.a_hat) == likelihood(fuse(doctored, b2), b1.a_hat)
+
+
+def test_a_hat_conf_never_reaches_the_filter():
+    # rule-certainty metadata may not multiply into likelihoods (D3 constraint N1).
+    # The B3 contract enforces this by omission — fusion drops the field — so two B1
+    # records differing only in a_hat_conf fuse identically and score identically,
+    # and no head can ever read it (review 12-F5).
+    from mica.intent.heads_v0 import likelihood
+
+    b1, b2 = next((a, b) for a, b in _pairs() if a.event_ids)
+    doctored = dataclasses.replace(b1, a_hat_conf=0.123)
+    assert fuse(b1, b2) == fuse(doctored, b2)
+    assert likelihood(fuse(b1, b2), b1.a_hat) == likelihood(fuse(doctored, b2), b1.a_hat)
+
+
+def test_a_hat_conf_never_reaches_the_filter():
+    # rule-certainty metadata may not multiply into likelihoods (D3 constraint N1).
+    # The B3 contract enforces this by omission — fusion drops the field — so two B1
+    # records differing only in a_hat_conf fuse identically and score identically,
+    # and no head can ever read it (review 12-F5).
+    from mica.intent.heads_v0 import likelihood
+
+    b1, b2 = next((a, b) for a, b in _pairs() if a.event_ids)
+    doctored = dataclasses.replace(b1, a_hat_conf=0.123)
+    assert fuse(b1, b2) == fuse(doctored, b2)
+    assert likelihood(fuse(b1, b2), b1.a_hat) == likelihood(fuse(doctored, b2), b1.a_hat)
+
+
+def test_a_hat_conf_never_reaches_the_filter():
+    # rule-certainty metadata may not multiply into likelihoods (D3 constraint N1).
+    # The B3 contract enforces this by omission — fusion drops the field — so two B1
+    # records differing only in a_hat_conf fuse identically and score identically,
+    # and no head can ever read it (review 12-F5).
+    from mica.intent.heads_v0 import likelihood
+
+    b1, b2 = next((a, b) for a, b in _pairs() if a.event_ids)
+    doctored = dataclasses.replace(b1, a_hat_conf=0.123)
+    assert fuse(b1, b2) == fuse(doctored, b2)
+    assert likelihood(fuse(b1, b2), b1.a_hat) == likelihood(fuse(doctored, b2), b1.a_hat)
+
+
 def test_mismatched_pairs_are_refused():
     pairs = _pairs()
     (b1_a, b2_a), (_, b2_b) = pairs[0], pairs[1]

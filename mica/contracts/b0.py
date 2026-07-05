@@ -66,12 +66,42 @@ class FrameRef:
     height: int
 
 
+# Who caused a block change. The actor is the causing player's USERNAME (world
+# processes appear under names like "fire"), and the rig pins the two usernames
+# exactly (user decision 2026-07-04): the human plays as HumanBuilder, the agent
+# joins the server as MICA_AI — replicas as MICA_AI_1, MICA_AI_2, ... The agent
+# being a real named player is the point: the capture attributes events by
+# username, so everything MICA ever places is tagged correctly with no special
+# writer path. (Collision with a stranger named MICA_AI is a non-risk on the
+# controlled offline rig — HumanBuilder is the pinned human account.)
+#
+# The rule this enables (A7, the do-operator): EVIDENCE consumers (D1's
+# macro-actions, D2's feature world) read human events only, so the agent's own
+# blocks can never become intent evidence; VERIFICATION consumers (the snapshot
+# monitor's shadow world, the B0 gate, event-id continuity) read ALL events,
+# because the real world contains the agent's blocks and the proofs must match
+# reality. Filtering happens at consumption, never at capture — the raw log
+# always records everything.
+HUMAN_ACTOR = "HumanBuilder"   # the rig's canonical human username (not enforced on
+                               # old captures — anything non-agent reads as human)
+AGENT_ACTOR = "MICA_AI"        # the agent's username; replicas append _1, _2, ...
+
+
+def is_agent_actor(actor: str) -> bool:
+    """True when a block event was caused by MICA's own agent rather than the human:
+    exactly MICA_AI, or MICA_AI_<suffix> (so MICA_AI_2 matches and a hypothetical
+    'MICA_AIX' does not)."""
+    return actor == AGENT_ACTOR or actor.startswith(AGENT_ACTOR + "_")
+
+
 @dataclass(frozen=True)
 class BlockEvent:
     # Numbered 0, 1, 2, ... within a session, in the order the recorder saw them. Two
     # checks depend on that exact numbering: the missing-change check compares the ids
     # against 0..declared-1, and single consumption means each id lands in one evidence
-    # record. A gap or reuse breaks both.
+    # record. A gap or reuse breaks both. The numbering covers EVERY actor's events —
+    # agent events keep their ids (continuity checks span them); they are excluded
+    # later, at the evidence boundary (see the actor rule above).
     event_id: int
     pos: BlockPos
     block_type: str

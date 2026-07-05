@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import collections
 import dataclasses
-import hashlib
 import json
 import os
 import statistics
@@ -31,30 +30,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 from mica.capture.discovery import newest_capture          # noqa: E402
 from mica.capture.jsonl_ingest import JsonlSource          # noqa: E402
 from mica.contracts.b1 import GOALS, MacroAction           # noqa: E402
+from mica.contracts.serialize import evidence2d_to_dict    # noqa: E402
 from mica.perception.evidence2d import evidence_stream     # noqa: E402
+from mica.perception.pixel_head import write_d1_provenance  # noqa: E402
 from mica.validation.b0_gate import gate_checks            # noqa: E402
 from mica.validation.evidence2d_check import check_stream  # noqa: E402
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RAW = os.path.join(_ROOT, "capture", "raw")
 _BUILD_ACTIONS = (MacroAction.PLACE.value, MacroAction.BREAK.value)
-
-
-def _evidence_to_dict(ev) -> dict:
-    sf, f = ev.state_feats, ev.focus
-    return {
-        "tick_range": list(ev.tick_range),
-        "a_hat": ev.a_hat.value, "a_hat_conf": ev.a_hat_conf, "idle": ev.idle, "scored": ev.scored,
-        "event_ids": list(ev.event_ids),
-        "state_feats": {
-            "held_item": sf.held_item, "hotbar": list(sf.hotbar), "pos_delta": list(sf.pos_delta),
-            "yaw_delta": sf.yaw_delta, "pitch_delta": sf.pitch_delta, "recent_actions": list(sf.recent_actions),
-        },
-        "focus": {"block": None if f.block is None else [f.block.x, f.block.y, f.block.z],
-                  "dwell_ticks": f.dwell_ticks},
-        "h2d": list(ev.h2d) if ev.h2d is not None else None,
-        "s_goal": list(ev.s_goal) if ev.s_goal is not None else None,
-    }
 
 
 def _enrich_pixels(records, session, stride):
@@ -89,43 +73,6 @@ def _enrich_pixels(records, session, stride):
         clip = window if stride == 1 else frames_between(t1 - _CLIP_LEN * stride + 1, t1)
         enriched.append(dataclasses.replace(ev, h2d=vpt.embed(window), s_goal=mineclip.score(clip, stride)))
     return enriched
-
-
-def _sha256(path: str) -> str:
-    if not os.path.exists(path):
-        return "missing"
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _write_d1_provenance(evidence_path: str, stride: int) -> str:
-    """Record the exact checkpoints, the goal prompts, and the s_goal path this pixel run
-    used (D1 spec §8). The prompts, similarity path, and clip stride all define s_goal the
-    way D2's templates define its features — changing any of them silently changes every
-    future score, so the sidecar must pin them.
-    """
-    from mica.contracts.goals import TAXONOMY, TAXONOMY_VERSION
-    from mica.perception.mineclip_head import PROMPT_TEMPLATES
-
-    provenance = {
-        "vpt_checkpoint": "vpt-1x.weights",
-        "vpt_checkpoint_sha256": _sha256(os.path.join(_ROOT, "models", "vpt-1x.weights")),
-        "mineclip_checkpoint": "mineclip_attn.pth",
-        "mineclip_checkpoint_sha256": _sha256(os.path.join(_ROOT, "models", "mineclip_attn.pth")),
-        "goals": list(GOALS),
-        "goal_taxonomy_version": TAXONOMY_VERSION,
-        "goal_taxonomy": {goal: list(subs) for goal, subs in TAXONOMY.items()},
-        "prompt_templates": list(PROMPT_TEMPLATES),
-        "s_goal_path": "trained-video-adapter",   # through the reward head's adapter + residual gate
-        "s_goal_clip_stride": stride,
-    }
-    out = evidence_path.replace(".evidence2d.jsonl", ".d1_provenance.json")
-    with open(out, "w", encoding="utf-8") as handle:
-        json.dump(provenance, handle, indent=2)
-    return out
 
 
 def _existing_has_pixels(path: str) -> bool:
@@ -181,23 +128,31 @@ def main() -> int:
 
     with open(out, "w", encoding="utf-8") as handle:
         for ev in records:
-            handle.write(json.dumps(_evidence_to_dict(ev)) + "\n")
+            handle.write(json.dumps(evidence2d_to_dict(ev)) + "\n")
 
     corrections = [ev for ev in records if ev.scored]
     context = [ev for ev in records if not ev.scored]
     per_class = collections.Counter(ev.a_hat.value for ev in corrections)
     consumed = [eid for ev in records for eid in ev.event_ids]
-    all_events = [e.event_id for p in session.packets for e in p.server.block_events]
+    # Fidelity is scoped to the HUMAN's events: the agent's own block events are
+    # excluded from evidence by contract (A7, contracts/b0.py), so they are expected
+    # to be unconsumed — counted separately, never as a failure.
+    from mica.contracts.b0 import is_agent_actor
+    all_events = [e.event_id for p in session.packets for e in p.server.block_events
+                  if not is_agent_actor(e.actor)]
+    agent_events = sum(1 for p in session.packets for e in p.server.block_events
+                       if is_agent_actor(e.actor))
     duplicates = [eid for eid, n in collections.Counter(consumed).items() if n > 1]
-    unconsumed = sorted(set(all_events) - set(consumed))   # every block event must land in exactly one record
+    unconsumed = sorted(set(all_events) - set(consumed))   # every HUMAN event must land in exactly one record
     mislabeled = [ev.a_hat.value for ev in corrections
                   if (ev.a_hat.value in _BUILD_ACTIONS) != bool(ev.event_ids)]
 
     print(f"D1  {os.path.basename(jsonl)}")
     print(f"  evidence records: {len(corrections)} scored + {len(context)} context  ->  {os.path.basename(out)}")
     print("  macro-actions (scored): " + ", ".join(f"{k}={per_class[k]}" for k in sorted(per_class)))
-    print(f"  block events: {len(all_events)} total, {len(set(consumed))} consumed once,"
-          f" {len(duplicates)} double-counted, {len(unconsumed)} unconsumed")
+    print(f"  block events: {len(all_events)} human, {len(set(consumed))} consumed once,"
+          f" {len(duplicates)} double-counted, {len(unconsumed)} unconsumed"
+          + (f", {agent_events} agent (excluded by A7)" if agent_events else ""))
     ok = not duplicates and not mislabeled and not unconsumed
     print(f"  [{'PASS' if ok else 'FAIL'}] build-action fidelity"
           + ("" if ok else f"  (duplicates={duplicates}, mislabeled={mislabeled}, unconsumed={unconsumed})"))
@@ -208,7 +163,7 @@ def main() -> int:
         ranked = sorted(zip(GOALS, means), key=lambda gm: -gm[1])
         print(f"  pixels: {len(filled)}/{len(records)} records carry h2d(1024) + s_goal({len(GOALS)})")
         print("  mean s_goal: " + ", ".join(f"{g}={m:.3f}" for g, m in ranked))
-        print(f"  provenance: {os.path.basename(_write_d1_provenance(out, stride))}")
+        print(f"  provenance: {os.path.basename(write_d1_provenance(out, stride))}")
 
     issues = check_stream(records)
     print(f"  [{'PASS' if not issues else 'FAIL'}] B1 contract validation"

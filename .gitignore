@@ -42,3 +42,12 @@ capture/raw/*
 capture/fabric-mod/run/
 capture/fabric-mod/.gradle/
 capture/scripted/
+# Rehearsal stagings and per-session graph reports are derived from raw captures
+capture/rehearsal/
+capture/reports/
+# Downloaded papers (large PDFs; see the vault's paper notes for the reviewed content)
+researchpapers/
+# IDE state
+.idea/
+# Source C mined clips (YouTube-derived frames/transcripts) - regenerable by the mining script
+capture/youtube/

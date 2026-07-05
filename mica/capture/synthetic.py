@@ -32,12 +32,16 @@ _BREAK_INPUT = InputState(keys=(), mouse_buttons=("left",), mouse_dx=0.0, mouse_
 
 @dataclass(frozen=True)
 class ScriptedPlacement:
-    """One planned block change: which block, where, when, and whether it's placed or broken."""
+    """One planned block change: which block, where, when, and whether it's placed or
+    broken. `actor` is None for the pretend human (the session id stands in for their
+    name); set it to the agent's reserved name (contracts/b0.py AGENT_ACTOR) to script
+    a block the AGENT placed — the evidence filters must ignore those."""
 
     tick: int
     pos: BlockPos
     block_type: str
     op: BlockOp = BlockOp.PLACE
+    actor: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,9 +76,11 @@ def _changes_at(build: ScriptedBuild, tick: int) -> tuple[ScriptedPlacement, ...
 
 def _held_at(build: ScriptedBuild, tick: int) -> str:
     """A builder equips what they are about to place — the held item switches to the
-    next change's block as it comes up, so pre-action windows see the real hand."""
+    next change's block as it comes up, so pre-action windows see the real hand.
+    Only the HUMAN's own upcoming placements count: the agent's scripted blocks
+    (actor set) never move the pretend human's hand."""
     upcoming = [p for p in build.placements
-                if p.op is BlockOp.PLACE and 0 <= p.tick - tick <= 20]
+                if p.op is BlockOp.PLACE and p.actor is None and 0 <= p.tick - tick <= 20]
     if upcoming:
         return min(upcoming, key=lambda p: p.tick).block_type
     return build.held_item
@@ -96,7 +102,7 @@ def _client_at(build: ScriptedBuild, tick: int) -> ClientObservation:
         hotbar=(held,),
         gui_open=False,
     )
-    changes = _changes_at(build, tick)
+    changes = [c for c in _changes_at(build, tick) if c.actor is None]   # the human's own
     if not changes:
         return idle
     first = changes[0]
@@ -131,7 +137,7 @@ def _server_at(
                 pos=change.pos,
                 block_type=change.block_type,
                 op=change.op,
-                actor=build.session_id,
+                actor=change.actor if change.actor is not None else build.session_id,
             )
         )
         # Placing uses up one of that block; breaking gives one back.

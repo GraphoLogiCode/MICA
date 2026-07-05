@@ -32,13 +32,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 from mica.capture.scripted_goals import build_from_plan, plan_variants   # noqa: E402
 from mica.capture.synthetic import generate_session                      # noqa: E402
 from mica.contracts.b1 import GOALS                                      # noqa: E402
+from mica.contracts.serialize import evidence2d_to_dict, evidence3d_to_dict  # noqa: E402
 from mica.perception.evidence2d import evidence_stream                   # noqa: E402
 from mica.perception.evidence3d import build_evidence3d                  # noqa: E402
 from mica.perception.voxel_replay import ReplayWorld, region_around_events  # noqa: E402
 from mica.validation.evidence2d_check import check_stream as check_b1    # noqa: E402
 from mica.validation.evidence3d_check import check_join, check_stream as check_b2  # noqa: E402
-from run_d1 import _evidence_to_dict                                     # noqa: E402
-from run_d2 import _record_to_dict                                       # noqa: E402
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _OUT = os.path.join(_ROOT, "capture", "scripted")
@@ -83,11 +82,11 @@ def _write_corpus(sessions) -> None:
         with open(os.path.join(_OUT, f"{build.session_id}.evidence2d.jsonl"), "w",
                   encoding="utf-8") as handle:
             for record in b1:
-                handle.write(json.dumps(_evidence_to_dict(record)) + "\n")
+                handle.write(json.dumps(evidence2d_to_dict(record)) + "\n")
         with open(os.path.join(_OUT, f"{build.session_id}.evidence3d.jsonl"), "w",
                   encoding="utf-8") as handle:
             for record in b2:
-                handle.write(json.dumps(_record_to_dict(record)) + "\n")
+                handle.write(json.dumps(evidence3d_to_dict(record)) + "\n")
     with open(os.path.join(_OUT, "labels.json"), "w", encoding="utf-8") as handle:
         json.dump(labels, handle, indent=2)
 
@@ -159,7 +158,9 @@ def _diversity_report(sessions) -> dict:
 
 
 def main() -> int:
-    per_goal = _flag_value("--per-goal", 4)
+    # Defaults must reproduce the banked corpus exactly (30 sessions = 6 per goal,
+    # seed 7): "regenerable by one command" means THIS command with no flags.
+    per_goal = _flag_value("--per-goal", 6)
     seed = _flag_value("--seed", 7)
     sessions = _generate(per_goal, seed)
     _write_corpus(sessions)

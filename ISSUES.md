@@ -11,6 +11,30 @@
 
 # ⚠️ REVIEW LATER — what still needs a look
 
+## D6. Naturalized synthetic motion — follow-ups (2026-07-05)
+The scripted builder now walks, aims before acting, lingers on fresh blocks, stares at broken
+spots, sweeps the structure during pauses, and glances at a virtual companion
+(`mica/capture/motion.py`, opt-in via `ScriptedBuild.motion`; `scripted_goals` sets a per-mode
+gaze style). Knock-ons to revisit:
+- [ ] **N-1 — `DELTA_COMP_WINDOW` counts corrections, not events.** With motion on, one placement
+  carries ~4-5 corrections (walk/aim/linger segments), so the delta_comp baseline shrinks from
+  ~5 events ago to ~1 — the `heads_v0` progress bump weakens on regenerated corpora. Decide:
+  baseline against event-carrying corrections only, or retune `_PROGRESS_GAIN`.
+- [ ] **N-2 — heads tuned on the robotic corpus.** `recent_actions` now interleaves
+  navigate/inspect/idle (the placing-streak gate drops mid-burst) and `focus.dwell_ticks` is
+  nonzero on build corrections (the intended dwell→INSPECT signal). Re-check `_STREAK_WEIGHT` /
+  `_DWELL_WEIGHT` / `_PROGRESS_GAIN` against the regenerated corpus.
+- [ ] **N-3 — yaw wrap in `evidence2d._camera_moved`.** Raw `now.yaw - before.yaw` misreads a
+  ±180° wrap as a huge one-tick INSPECT spike on real captures. The choreographer sidesteps it
+  (it emits continuous unwrapped yaw), but the mod records raw yRot — fix with a wrapped-difference
+  helper.
+- [~] **N-4 — shortcut pacing outruns vanilla sprint.** Scattered shortcut plans place blocks
+  ~9 cells apart every 3-4 ticks; no walk covers that at 0.28 blocks/tick. Reach stays the hard
+  invariant (the builder always arrives before acting), so hasty sessions carry a declared
+  scramble allowance (`MotionStyle.dash_cap` 0.75 vs. sprint) — deliberate sessions stay fully
+  vanilla (measured worst step 0.246). Deferred-by-design: fixing it for real would mean slowing
+  the frozen placement schedules, which would change every seeded corpus.
+
 ## A2. Mod 0.0.3 (D2 prerequisites) — **ALL VERIFIED 2026-07-02 evening (session `194242`)**
 Jar 1.1.0 built 19:41; verification session: 5185 ticks, 9 events, 4 snapshots. The strong check was a
 mini Proposition-1 replay: events applied to snapshot 0 vs later snapshots — **117,647 of 117,649 cells

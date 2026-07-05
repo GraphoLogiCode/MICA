@@ -20,6 +20,7 @@ from ..contracts.b0 import (
 )
 from ..contracts.manifest import CapturedSession, SessionManifest
 from ..contracts.timebase import MS_PER_TICK
+from .motion import MotionStyle, TickPose, choreograph
 
 _TRAILING_TICKS = 2  # quiet steps after the last change — real recordings keep running past the
                      # last block, and the trailing idle is what closes the final action segment
@@ -52,6 +53,7 @@ class ScriptedBuild:
     server_lag_ms: float = 0.0  # how late the server runs behind the ideal 20-steps-per-second pace
     dimension: str = "overworld"
     biome: str = "plains"
+    motion: MotionStyle | None = None  # None keeps the static pose (frozen body, snap aim)
 
 
 def _server_wallclock_ms(build: ScriptedBuild, tick: int) -> float:
@@ -147,22 +149,41 @@ def _server_at(
     return server, event_id
 
 
+def _posed(
+    client: ClientObservation, server: ServerObservation, pose: TickPose
+) -> tuple[ClientObservation, ServerObservation]:
+    """Lay a choreographed pose over the static observation: gaze, aim, walking keys,
+    and body position come from the pose; the action's mouse buttons stay."""
+    input_state = client.input_state
+    if input_state is not None:
+        input_state = replace(input_state, keys=pose.keys)
+    client = replace(client, yaw=pose.yaw, pitch=pose.pitch,
+                     crosshair_target=pose.crosshair, input_state=input_state)
+    server = replace(server, player_pos=PlayerPos(x=pose.x, y=pose.y, z=pose.z))
+    return client, server
+
+
 def generate_session(build: ScriptedBuild) -> CapturedSession:
     """Turn a build plan into a full pretend recording: the setup plus one captured moment per step."""
+    track = choreograph(build) if build.motion is not None else None
     # default=0 lets a walk-only plan (no changes) still make a few idle moments.
     last_tick = max((placement.tick for placement in build.placements), default=0)
+    total_ticks = len(track) if track is not None else last_tick + _TRAILING_TICKS + 1
     manifest = SessionManifest(
         session_id=build.session_id,
         session_start_ms=build.session_start_ms,
     )
     packets: list[ObservationPacket] = []
     next_event_id = 0
-    for tick in range(last_tick + _TRAILING_TICKS + 1):
+    for tick in range(total_ticks):
         server, next_event_id = _server_at(build, tick, next_event_id)
+        client = _client_at(build, tick)
+        if track is not None:
+            client, server = _posed(client, server, track[tick])
         packet = ObservationPacket(
             tick=tick,
             wallclock_ms=int(_server_wallclock_ms(build, tick)),
-            client=_client_at(build, tick),
+            client=client,
             server=server,
         )
         packets.append(packet)

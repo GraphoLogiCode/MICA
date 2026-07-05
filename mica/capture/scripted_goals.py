@@ -19,6 +19,9 @@ to stop a likelihood head from memorizing one fixed action sequence per goal:
               events, non-monotone edit distance, honest mess
   completion  some sessions stop at 85-100% — partially finished builds exist in life
   palette     goals that accept any solid block get built from varied materials
+  gaze        the mode's motion signature: deliberate builders walk, aim, linger on
+              fresh blocks, and sweep the structure during pauses; shortcut builders
+              flick and rush (the MotionStyle presets in capture.motion)
 
 What this deliberately does NOT provide: pixel frames (synthetic sessions have none, so
 h2d/s_goal need real in-game captures), free-form non-template builds (that is Source B's
@@ -34,6 +37,7 @@ from random import Random
 from ..contracts.b0 import BlockOp, BlockPos
 from ..contracts.goals import TAXONOMY
 from ..perception.templates import REQ_SOLID, instance, rotate_offset
+from .motion import DELIBERATE_GAZE, SHORTCUT_GAZE
 from .synthetic import ScriptedBuild, ScriptedPlacement
 
 _GROUND_Y = 64
@@ -150,6 +154,7 @@ def build_from_plan(plan: BuildPlan) -> tuple[ScriptedBuild, dict]:
         session_id=f"scripted-{plan.subtype.replace(' ', '-')}-{plan.seed}",
         held_item=plan.block,
         placements=tuple(placements),
+        motion=DELIBERATE_GAZE if plan.mode == "deliberate" else SHORTCUT_GAZE,
     )
     label = {
         "goal": plan.goal, "subtype": plan.subtype, "mode": plan.mode,

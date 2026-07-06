@@ -52,9 +52,10 @@ def _scripted_sessions():
 
 
 def _real_sessions():
-    """Every raw capture next to a manifest that passes the B0 gate; [] elsewhere."""
+    """Every raw capture next to a manifest that passes the B0 gate; [] elsewhere.
+    Recursive so the migrated date/session layout is searched as well as the flat root."""
     found = []
-    for path in sorted(glob.glob(os.path.join(_RAW, "*.jsonl"))):
+    for path in sorted(glob.glob(os.path.join(_RAW, "**", "*.jsonl"), recursive=True)):
         if ".evidence" in os.path.basename(path):
             continue   # derived artifacts, not captures
         manifest = path.replace(".jsonl", ".manifest.json")

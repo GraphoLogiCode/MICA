@@ -27,6 +27,7 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
+from mica.capture import session_store                     # noqa: E402
 from mica.capture.discovery import newest_capture          # noqa: E402
 from mica.capture.jsonl_ingest import JsonlSource          # noqa: E402
 from mica.contracts.b1 import GOALS, MacroAction           # noqa: E402
@@ -41,7 +42,7 @@ _RAW = os.path.join(_ROOT, "capture", "raw")
 _BUILD_ACTIONS = (MacroAction.PLACE.value, MacroAction.BREAK.value)
 
 
-def _enrich_pixels(records, session, stride):
+def _enrich_pixels(records, session, stride, jsonl):
     """Fill h2d (from the record's window) + s_goal (last 16 frames at the given stride,
     reaching further back than the window when stride > 1 — still strictly pre-action)."""
     from PIL import Image
@@ -50,14 +51,20 @@ def _enrich_pixels(records, session, stride):
 
     vpt, mineclip = VptTrunk(), MineClipHead()
     by_tick = {packet.tick: packet for packet in session.packets}
+    # Frame paths are stored absolute in the raw jsonl; if the session was relocated
+    # (the date/session layout) those go stale, so resolve tolerantly against where
+    # the jsonl actually sits now.
+    capture_dir = os.path.dirname(os.path.abspath(jsonl))
 
     def frames_between(t0, t1):
         loaded = []
         for t in range(t0, t1 + 1):
             packet = by_tick.get(t)
             ref = packet.client.pov_frame if packet else None
-            if ref is not None and os.path.exists(ref.path):
-                with Image.open(ref.path) as image:
+            path = (session_store.resolve_frame(ref.path, session.manifest.session_id,
+                                                capture_dir) if ref is not None else None)
+            if path is not None:
+                with Image.open(path) as image:
                     loaded.append(image.convert("RGB"))   # load into memory; the file handle closes here
         return loaded
 
@@ -124,7 +131,7 @@ def main() -> int:
     stride = _sgoal_stride()
     if pixels:
         print(f"  loading frozen VPT + MineCLIP on GPU ... (s_goal clip stride {stride})")
-        records = _enrich_pixels(records, session, stride)
+        records = _enrich_pixels(records, session, stride, jsonl)
 
     with open(out, "w", encoding="utf-8") as handle:
         for ev in records:

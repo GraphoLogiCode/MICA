@@ -34,6 +34,7 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
+from mica.capture import session_store                              # noqa: E402
 from mica.capture.pivot_builds import pivot_build                    # noqa: E402
 from mica.capture.scripted_goals import plan_variants                # noqa: E402
 from mica.capture.synthetic import generate_session                  # noqa: E402
@@ -63,8 +64,11 @@ _PIVOT_PAIRS = (("habitation", "defense"), ("production", "decorative"),
 
 # The training/tuning exposure of each learned arm, for honest grouping. Arm 1 and
 # the v1 heads share the pinned split, so one map serves both.
+# (Cascade A, 2026-07-06: session 001126 became pairs-eligible and entered training —
+# it moves to train-seen; its recognition numbers are no longer generalization.)
 _REAL_TRAIN_SEEN = {"fabric-20260704-232045", "fabric-20260705-002717",
-                    "fabric-20260705-131308", "fabric-20260705-131826"}
+                    "fabric-20260705-131308", "fabric-20260705-131826",
+                    "fabric-20260706-001126"}
 _REAL_VALIDATION = {"fabric-20260705-134615"}
 
 
@@ -303,7 +307,7 @@ def main() -> int:
 
     print("real captures (free choice / template) ...")
     for session_id, meta in real_labeled_sessions().items():
-        fused = _load_banked(_RAW, session_id)
+        fused = _load_banked(session_store.session_dir(session_id), session_id)
         group = ("real_train_seen" if session_id in _REAL_TRAIN_SEEN
                  else "real_validation" if session_id in _REAL_VALIDATION
                  else "real_never_seen")

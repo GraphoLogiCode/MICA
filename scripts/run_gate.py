@@ -42,6 +42,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 from make_decoder_corpus import _fused_for_build                      # noqa: E402
+from mica.capture import session_store                              # noqa: E402
 from mica.capture.jsonl_ingest import JsonlSource                     # noqa: E402
 from mica.contracts.b0 import BlockOp, is_agent_actor                 # noqa: E402
 from mica.contracts.b3 import fuse_dicts                              # noqa: E402
@@ -62,9 +63,10 @@ _MAX_ACTIONS = 8
 _THIN_TRAIN_SEEN = 5      # every Nth read on real train-seen sessions (cost, recorded)
 _SUGGEST_PERCENTILE = 0.80
 
-# The same exposure grouping every Phase-F artifact used.
+# The same exposure grouping every arms artifact uses (cascade A: 001126 train-seen).
 _REAL_TRAIN_SEEN = {"fabric-20260704-232045", "fabric-20260705-002717",
-                    "fabric-20260705-131308", "fabric-20260705-131826"}
+                    "fabric-20260705-131308", "fabric-20260705-131826",
+                    "fabric-20260706-001126"}
 _REAL_VALIDATION = {"fabric-20260705-134615"}
 
 
@@ -75,11 +77,12 @@ def _flag_value(name: str, default: int) -> int:
 
 
 def _load_banked_fused(session_id: str):
+    directory = session_store.session_dir(session_id)
     b1 = [json.loads(line) for line in
-          open(os.path.join(_RAW, f"{session_id}.evidence2d.jsonl"), encoding="utf-8")
+          open(os.path.join(directory, f"{session_id}.evidence2d.jsonl"), encoding="utf-8")
           if line.strip()]
     b2 = [json.loads(line) for line in
-          open(os.path.join(_RAW, f"{session_id}.evidence3d.jsonl"), encoding="utf-8")
+          open(os.path.join(directory, f"{session_id}.evidence3d.jsonl"), encoding="utf-8")
           if line.strip()]
     scored = [record for record in b1 if record.get("scored")]
     return [fuse_dicts(a, b) for a, b in zip(scored, b2)]
@@ -205,8 +208,8 @@ def main() -> int:
                  else "real_never_seen")
         fused = _load_banked_fused(session_id)
         packets = JsonlSource(
-            jsonl_path=os.path.join(_RAW, f"{session_id}.jsonl"),
-            manifest_path=os.path.join(_RAW, f"{session_id}.manifest.json"),
+            jsonl_path=session_store.session_file(session_id, ".jsonl"),
+            manifest_path=session_store.session_file(session_id, ".manifest.json"),
         ).load().packets
         sessions.append((session_id, group, fused, packets,
                          thin if group == "real_train_seen" else 1))

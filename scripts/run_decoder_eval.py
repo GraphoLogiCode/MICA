@@ -39,6 +39,7 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
+from mica.capture import session_store                              # noqa: E402
 from mica.contracts.b3 import fuse_dicts                              # noqa: E402
 from mica.contracts.b4 import SLOT_KINDS                              # noqa: E402
 from mica.contracts.goals import GOALS                                # noqa: E402
@@ -356,7 +357,7 @@ def main() -> int:
     if validation_real in real_sessions:
         from mica.intent.tracker import category_marginal
 
-        fused = _load_banked_fused(_RAW, validation_real)
+        fused = _load_banked_fused(session_store.session_dir(validation_real), validation_real)
         tick_sequences.append([f.tick for f in fused])
         validation_p_tops = [max(category_marginal(b).values())
                              for b in decoder_corpus.replay_beliefs(fused)]
@@ -528,7 +529,7 @@ def _commit_traces(model, holdout, labels, real_sessions, params, delta_hat,
                     "k_commit": held_k, "per_position": positions,
                     "source": "decoder_holdout"}) + "\n")
         for session_id, meta in sorted(real_sessions.items()):
-            fused = _load_banked_fused(_RAW, session_id)
+            fused = _load_banked_fused(session_store.session_dir(session_id), session_id)
             beliefs = decoder_corpus.replay_beliefs(fused)
             origin = context_builder.build_origin(fused)
             hysteresis = commit.CommitHysteresis()

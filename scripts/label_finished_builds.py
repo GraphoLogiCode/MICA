@@ -30,6 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 from mica.data import vlm                                             # noqa: E402
+from mica.capture import session_store                              # noqa: E402
 from mica.capture.jsonl_ingest import JsonlSource                     # noqa: E402
 from mica.capture.scripted_goals import build_from_plan, plan_variants  # noqa: E402
 from mica.capture.synthetic import generate_session                   # noqa: E402
@@ -99,8 +100,12 @@ def _label_real() -> list[dict]:
     for session_id, human in human_labels.items():
         entry = {"session": session_id, "kind": "real",
                  "builder_label": {"goal": human.get("goal"), "subtype": human.get("subtype")}}
-        jsonl = next((os.path.join(root, f"{session_id}.jsonl") for root in _capture_roots()
-                      if os.path.exists(os.path.join(root, f"{session_id}.jsonl"))), None)
+        # session_store resolves each root to the session's dated dir (or flat, for
+        # un-migrated captures / external MICA_RAW_DIRS roots); snapshots + written
+        # source_b then follow os.path.dirname(jsonl), which is the session dir.
+        jsonl = next((path for root in _capture_roots()
+                      for path in [session_store.session_file(session_id, ".jsonl", root)]
+                      if os.path.exists(path)), None)
         if jsonl is None:
             entry["skipped"] = "recording not found in any capture root"
             results.append(entry)

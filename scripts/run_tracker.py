@@ -37,6 +37,7 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
+from mica.capture import session_store                       # noqa: E402
 from mica.contracts.b3 import fuse_dicts                     # noqa: E402
 from mica.intent.heads_v0 import likelihood, strip_behavior, strip_structure  # noqa: E402
 from mica.intent.tracker import (                            # noqa: E402
@@ -63,8 +64,8 @@ def real_labeled_sessions() -> dict[str, dict]:
     for session_id, label in labels.items():
         if session_id in _QUARANTINED:
             continue
-        b1 = os.path.join(_RAW, f"{session_id}.evidence2d.jsonl")
-        b2 = os.path.join(_RAW, f"{session_id}.evidence3d.jsonl")
+        b1 = session_store.session_file(session_id, ".evidence2d.jsonl")
+        b2 = session_store.session_file(session_id, ".evidence3d.jsonl")
         if os.path.exists(b1) and os.path.exists(b2):
             sessions[session_id] = {"goal": label["goal"], "mode": label.get("mode", ""),
                                     "b1": b1, "b2": b2}
@@ -174,7 +175,7 @@ def main() -> int:
     results = []
     traces: dict[str, tuple[str, list]] = {}
     for session_id, label in labels.items():
-        directory = _RAW if real else _CORPUS
+        directory = session_store.session_dir(session_id) if real else _CORPUS
         b1 = [json.loads(line) for line in
               open(os.path.join(directory, f"{session_id}.evidence2d.jsonl"), encoding="utf-8")]
         b2 = [json.loads(line) for line in

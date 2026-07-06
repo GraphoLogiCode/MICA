@@ -9,6 +9,119 @@
 
 ---
 
+# 📁 RAW FOLDER REORGANIZED BY DATE/SESSION + AFTER-GAME AUTOMATION + CASCADE-A WRAPPER (2026-07-06, user request)
+
+`capture/raw/` was a flat pile (35 sessions' output files interleaved with ~30 global
+reports). Now organized `capture/raw/<date>/<session_id>/` — one folder per game holding all
+its logs; global aggregates (reports, figures, `labels.json`, `arm2_cache.jsonl`, `agent-*`,
+`pre_cascade_a/`) stay at the root. **Nothing lost, reproduction intact**: after migrating all
+35 sessions, `run_tracker --real --heads v1` and `run_gate` reproduce the banked cascade-A
+numbers exactly (real acc 0.364; gate ALL PASS, the 13 PLACE_LOW_RISK commits, identical
+blocking rates), and golden-equivalence over real captures still runs (test fixed to search
+the nested tree).
+
+**How it's built (small blast radius by design):**
+- `mica/capture/session_store.py` — the one resolver for "where does session X live":
+  `session_dir/session_file` return `<root>/<date>/<id>/` with a **legacy-flat fallback** so
+  un-migrated + non-dated (test) sessions keep resolving. `resolve_frame` tolerates relocation
+  (frame paths are baked ABSOLUTE in the raw jsonl; a moved session's go stale — resolved
+  against the jsonl's current dir instead).
+- Writers were already sibling-to-jsonl, and snapshots/frames move WITH the jsonl (siblinghood
+  preserved), so only the fixed-root READERS changed (run_tracker/arms/gate/decoder_eval,
+  training_pairs, label_finished_builds) + a recursive glob in training_pairs and the
+  stream-equivalence test. `run_d1` got the relocation-tolerant frame resolver.
+- `scripts/migrate_raw_layout.py` — dry-run-default, idempotent, writes `_migration_manifest.json`
+  (from→to, reversible). Ran `--apply`: 35 sessions moved.
+- **Future logs organize themselves**: `after_game.py` relocates each fresh capture into its
+  dated dir as step 1, and all derived outputs land there as siblings — no mod change needed.
+
+**`scripts/after_game.py` — run after each game (the manual treehouse dance, automated):**
+`--goal <cat> --subtype <style> [--session <id>]` → wait for a finalized manifest → relocate →
+bank `*.live-quarantined.*` if the live loop dropped socket events → B0 gate → `run_d1 --pixels`
+→ `run_d2 --h3d` (a non-zero exit = structure quarantine → flag + skip label) → upsert
+`labels.json` → `label_finished_builds` → write `<session>/inspect.md` + `session_report.json`.
+**Stops before any retrain.** `--all` catches up a backlog (keys on "has evidence yet"; lists
+sessions still needing a builder label); `--status` prints the readiness line.
+
+**Stacking + readiness — `capture/raw/cascade_status.json`:** tracks the agreed-capture set +
+pair pool at the last cascade, so `--status` aggregates across all stacked games: "since the
+last cascade (2026-07-06): N new agreed captures, +M pairs — ready." Baseline stamped to the
+cascade A already run (6 agreed, 9,881 pairs).
+
+**`scripts/run_cascade_a.py` — the batch retrain, one command** (still user-invoked; the fire
+decision stays manual): banks pre-cascade models, runs the pinned chain (`--unpin` corpus →
+relabel → train_heads → calibration/tracker → train_arm1 → run_arms → `--unpin` decoder corpus
+→ train_decoder → eval → gate), fails fast on any non-zero step, stamps the readiness baseline.
+`--dry-run` lists the chain.
+
+**Runbook:** play → `after_game.py --goal G --subtype S` (or `--all` for a backlog) → check
+`inspect.md` per session → `after_game.py --status` → when it says READY, `run_cascade_a.py`.
+
+# 🌊 CASCADE A EXECUTED — MOTION REGENERATION + FULL RETRAIN CHAIN; FIRST PLACE_LOW_RISK COMMITS UNDER ALL SAFETY CRITERIA (2026-07-06, user instruction)
+
+Fired on the treehouse capture per the pin. One chain, every step one command, pre-cascade
+artifacts banked first (`models/pre_cascade_a/`, `capture/raw/pre_cascade_a/`): --unpin corpus
+regen → relabel → train_heads → calibration + tracker reruns → train_arm1 → run_arms →
+--unpin decoder corpus → train_decoder → run_decoder_eval → run_gate. Pins removed — the
+no-flag reproduction rule is RESTORED (banks match current code). 272 tests green.
+Exposure honesty: 001126 moved to _REAL_TRAIN_SEEN in run_arms/run_gate BEFORE any table.
+
+**BEFORE → AFTER (static banks → motion banks + treehouse):**
+- **Data**: scripted pairs 3,098 → 4,303 (labeler 1.0/1.0 both eras); real pairs 3,848 (5
+  sessions) → 5,578 (6); decoder corpus 12,209 → 17,081 samples.
+- **Heads**: 12-F8 mode margin **−0.084 INVERTED → +0.258 FIXED** (the motion gaze signature
+  did exactly what it was built for); pooled real acc 0.400 (4/10) → 0.364 (4/11 — same
+  correct calls, bigger population); held-out ECE 0.1199 (underconfident) → 0.1776
+  (overconfident drift — recorded); treehouse: production-82% misread → correct from 11.3%
+  (train-seen now).
+- **Arms**: v0 scripted holdout 1.000/+0.016 PASS (stable); arm2 1.000/+0.039 PASS; **v1
+  scripted holdout regressed 0.400 → 0.000** (the domain trade sharpened: v1 leans further
+  into real evidence); real_never_seen — every arm still FAILS the pre-registered earliness
+  bar (population unchanged; the provisional-negative verdict STANDS — held-out builders
+  remain the bottleneck). Pivots (now motion): v1 3/5 (two near-instant: 0 and 4 steps),
+  v0 1/5. Arm2 provenance: 1,815 fresh queries + 1,634 cache hits.
+- **Decoder**: Stage-B holdout NLL 1.2219 → 1.1115; OQ1 PASS with a wider margin (retrofit
+  gain 0.9343→0.8885; its coherence contribution 0.048→0.213 = 4.4×); coherence holdout
+  0.107 → 0.213, banked transfer 0.216 → 0.347; horizon-4 τ-acc 0.849 → 0.887;
+  intervenability flip 0.483 → 0.583 (truth-alignment 0.38 → 0.25, recorded).
+- **Gate**: validation belief reach conf-max 0.328 → **0.557**; staircase θ₁ 0.30 → **0.50**
+  (a-priori reachable, p*max 0.9963, δ̂ 0.2284 s); FSM θ_suggest 0.277 → 0.38, θ_place
+  0.377 → 0.48; mean K_commit 0.68 → ~0.79; **PLACE_LOW_RISK fired for the first time — 13
+  committed actions on real train-seen reads, pass criteria ALL PASS (0 under-threshold /
+  irreversible / untraceable / low-confidence)**. Synthetic motion sessions now exercise the
+  proximity veto for real (walking builders: decoder_holdout blocking 0.29 → 0.78).
+
+**Honest ledger**: the headline never-seen earliness claim is unchanged (still fails, still
+data-limited on BUILDERS, not sessions); v1 gave up scripted-holdout accuracy; calibration
+drifted overconfident and should be watched at the next retrain. What the cascade bought:
+a working mode latent, a decoder twice as coherent, a gate strong enough to place — and one
+corpus story consistent with the code again.
+
+# 🌳 SESSION 001126 (TREEHOUSE) CLOSED — SIXTH MATCHER-AGREED CAPTURE, +1,730 PAIRS; CASCADE-A TRIGGER ARMED (2026-07-06)
+
+The user's free-build treehouse (~6.7 min, 336 events, 31 snapshots). Three-part outcome:
+- **Capture: proof-grade.** Disk B0 gate PASS; manifest finalized; replay check PASS (all
+  divergences in documented classes, 0 crop escapes). The LIVE loop quarantined itself
+  (socket drops: 165 ticks / 11 stretches, **4 block events lost in flight**) — correct
+  behavior, disk authoritative; live artifacts banked as `*.live-quarantined.*` and evidence
+  REGENERATED OFFLINE (`run_d1 --pixels --overwrite`, `run_d2 --h3d --overwrite`: fidelity
+  PASS, 336/336 consumed once, 96% pixel-enriched, 94% h3d).
+- **Labeling: TRIPLE AGREEMENT** (second ever, after treehouse-002717): matcher habitation
+  (style read: longhouse) score 0.2377 ≥ 0.2 with clean margin; VLM cross-check habitation;
+  builder habitation/treehouse. **1,730 pairs written** — source_b total 6,946 → 8,676 across
+  6 matcher-agreed real captures. Labeler rerun was bank-safe as predicted: scripted 30/30
+  kept at accuracy 1.0/1.0 (motion changes no placements; pairs rewritten from banked
+  evidence).
+- **Recognition: both head configurations misread it — which is exactly its training value.**
+  Live (v0, quarantined evidence): pinned at uniform (H≈2.30) the whole session. Offline v1
+  on clean evidence: called PRODUCTION for 82% of corrections (p_top to 0.43), habitation
+  only closing at the end (0.249 vs 0.272) — the fresh pairs teach precisely this mistake.
+
+**Cascade-A trigger status**: the pinned trigger is "the next batch of matcher-agreed
+captures." One new capture (+1,730 pairs, +45% real-pair volume) is now banked; whether it
+alone constitutes the batch — firing --unpin regen → retrain heads/arm1 → rerun arms →
+decoder corpus → retrain decoder → eval + gate — is the user's call.
+
 # ⚠️ REVIEW LATER — what still needs a look
 
 ## D6. Naturalized synthetic motion — follow-ups (2026-07-05)

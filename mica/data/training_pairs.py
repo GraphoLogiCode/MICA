@@ -110,11 +110,15 @@ def load_source_a() -> list[Sample]:
 
 def load_source_b() -> list[Sample]:
     """Every real capture's pairs. Only sessions the labeler KEPT with an uncontested
-    label have a source_b file at all, so the contest rule is already enforced."""
+    label have a source_b file at all, so the contest rule is already enforced.
+    Recursive so the pairs are found whether the raw tree is flat (legacy) or
+    organized by date/session (the session_store layout)."""
+    import glob
+
     samples = []
-    for name in sorted(os.listdir(_RAW)):
-        if name.endswith(".source_b.jsonl"):
-            samples.extend(_load_session_pairs(os.path.join(_RAW, name), "B", None))
+    for path in sorted(glob.glob(os.path.join(_RAW, "**", "*.source_b.jsonl"),
+                                 recursive=True)):
+        samples.extend(_load_session_pairs(path, "B", None))
     return samples
 
 

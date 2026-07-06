@@ -1,6 +1,6 @@
 """Calibration report — the D3 pass-criterion artifact, harness built ahead of Phase E.
 
-    python scripts/calibration_report.py
+    python scripts/calibration_report.py [--real] [--heads v1]
 
 A belief is only useful to the gate if its probabilities MEAN something: when the
 tracker says "70% habitation", it should be right about 70% of the time. This script
@@ -12,22 +12,31 @@ confidence, was-it-right) point, and bins them into reliability data:
                         and the fraction that were actually correct
   ECE                -> the confidence-weighted gap between the two (0 = calibrated)
 
-Today it runs on the scripted corpus with the hand-coded v0 heads — that proves the
-harness and gives the baseline number, nothing more. The Phase-E criterion ("heads
-calibrated on held-out sessions before their outputs are trusted") reuses this exact
-artifact once trained heads and real captures exist. Honesty note printed with every
-run: the corpus has ONE builder (the generator), so the builder-level holdout the
-D3 note prescribes is degenerate here — real multi-session data is what makes the
-number load-bearing.
+The default run (scripted corpus, hand-coded v0 heads) proves the harness and gives
+the baseline number, nothing more. Honesty note printed with every run: the corpus
+has ONE builder (the generator), so the builder-level holdout the D3 note prescribes
+is degenerate here — real multi-session data is what makes the number load-bearing.
+
+--real scores the labeled real captures instead (truth = builder category, the
+quarantined session excluded); --heads v1 swaps in the trained heads with their
+jointly-fitted temperatures and filter knobs. --held-out further drops every real
+session whose pairs entered v1 TRAINING, leaving only sessions the model has never
+seen — that run is the Phase-E pass criterion (09-F9: "calibrated" only with a
+held-out reliability diagram). Every run also reports the 12-F8 mode-informativeness
+check: the belief-averaged deliberative-vs-heuristic probability gap of the observed
+action at choice points (PLACE corrections) — trained heads must widen it over v0's
+thin measured margin. Output names carry _real/_v1/_heldout suffixes so baselines
+never overwrite.
 """
 from __future__ import annotations
 
 import json
 import os
+import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
-from mica.contracts.b1 import GOALS                          # noqa: E402
+from mica.contracts.b1 import GOALS, MacroAction             # noqa: E402
 from mica.contracts.b3 import fuse_dicts                     # noqa: E402
 from mica.intent.heads_v0 import likelihood                  # noqa: E402
 from mica.intent.tracker import (                            # noqa: E402
@@ -36,29 +45,39 @@ from mica.intent.tracker import (                            # noqa: E402
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CORPUS = os.path.join(_ROOT, "capture", "scripted")
+_RAW = os.path.join(_ROOT, "capture", "raw")
 _BINS = 10
 
 
-def _correction_points(session_id: str, truth: str, params: TrackerParams) -> list[tuple[float, bool]]:
-    """(top-goal confidence, correct?) at every correction of one session."""
+def _correction_points(directory: str, session_id: str, truth: str,
+                       params: TrackerParams) -> tuple[list[tuple[float, bool]], list[float]]:
+    """(top-goal confidence, correct?) at every correction of one session, plus the
+    12-F8 margins: at each PLACE correction (a choice point), the belief-averaged
+    deliberative probability of the observed action minus the heuristic one."""
     b1 = [json.loads(line) for line in
-          open(os.path.join(_CORPUS, f"{session_id}.evidence2d.jsonl"), encoding="utf-8")]
+          open(os.path.join(directory, f"{session_id}.evidence2d.jsonl"), encoding="utf-8")]
     b2 = [json.loads(line) for line in
-          open(os.path.join(_CORPUS, f"{session_id}.evidence3d.jsonl"), encoding="utf-8")]
+          open(os.path.join(directory, f"{session_id}.evidence3d.jsonl"), encoding="utf-8")]
     scored = [record for record in b1 if record["scored"]]
     belief = uniform_belief()
     previous_tick = 0
-    points = []
+    points, margins = [], []
     for b1_record, b2_record in zip(scored, b2):
         fused = fuse_dicts(b1_record, b2_record)             # the verified join
         dt = max(fused.tick - previous_tick, 1) / 20.0
         previous_tick = fused.tick
         belief = predict(belief, dt, params)
-        belief, _ = correct(belief, likelihood(fused, fused.a_hat), params)
+        table = likelihood(fused, fused.a_hat)
+        if fused.a_hat == MacroAction.PLACE:
+            delib_mass = sum(belief[(g, 0)] for g in GOALS)
+            if delib_mass > 0:
+                weighted_delib = sum(belief[(g, 0)] * table[(g, 0)] for g in GOALS) / delib_mass
+                margins.append(weighted_delib - table[(GOALS[0], 1)])
+        belief, _ = correct(belief, table, params)
         marginal = category_marginal(belief)
         top = max(marginal, key=marginal.get)
         points.append((marginal[top], top == truth))
-    return points
+    return points, margins
 
 
 def _reliability(points: list[tuple[float, bool]]) -> dict:
@@ -85,37 +104,83 @@ def _reliability(points: list[tuple[float, bool]]) -> dict:
 
 
 def main() -> int:
-    labels_path = os.path.join(_CORPUS, "labels.json")
-    if not os.path.exists(labels_path):
-        print("no corpus found - run scripts/make_scripted_corpus.py first")
-        return 1
-    with open(labels_path, encoding="utf-8") as handle:
-        labels = json.load(handle)
-    params = TrackerParams()
+    global likelihood
+    real = "--real" in sys.argv
+    v1 = "--heads" in sys.argv and sys.argv[sys.argv.index("--heads") + 1] == "v1"
+    if v1:
+        from mica.intent import heads_v1
+        likelihood = heads_v1.likelihood
+        params = heads_v1.tracker_params()
+    else:
+        params = TrackerParams()
+    held_out = "--held-out" in sys.argv
+    if real:
+        from run_tracker import real_labeled_sessions
+        labels = real_labeled_sessions()
+        if not labels:
+            print("no labeled real captures with banked evidence found")
+            return 1
+        if held_out:
+            # A session trained on v1 iff its pairs file exists AND it was not in the
+            # training holdout (heads_v1.json pins that list). What remains is data
+            # the model has never seen — the only rows a calibration CLAIM may cite.
+            with open(os.path.join(_ROOT, "models", "heads_v1.json"), encoding="utf-8") as handle:
+                pinned_holdout = set(json.load(handle)["data"]["held_out_sessions"])
+            trained = {sid for sid in labels
+                       if os.path.exists(os.path.join(_RAW, f"{sid}.source_b.jsonl"))
+                       and sid not in pinned_holdout}
+            labels = {sid: meta for sid, meta in labels.items() if sid not in trained}
+            print(f"held-out only: dropped training sessions {sorted(trained)}")
+        directory = _RAW
+    else:
+        labels_path = os.path.join(_CORPUS, "labels.json")
+        if not os.path.exists(labels_path):
+            print("no corpus found - run scripts/make_scripted_corpus.py first")
+            return 1
+        with open(labels_path, encoding="utf-8") as handle:
+            labels = json.load(handle)
+        directory = _CORPUS
 
     pooled: list[tuple[float, bool]] = []
     finals: list[tuple[float, bool]] = []
+    all_margins: list[float] = []
     by_goal: dict[str, list[tuple[float, bool]]] = {goal: [] for goal in GOALS}
     for session_id, label in labels.items():
-        points = _correction_points(session_id, label["goal"], params)
+        points, margins = _correction_points(directory, session_id, label["goal"], params)
         pooled.extend(points)
+        all_margins.extend(margins)
         finals.append(points[-1])
         by_goal[label["goal"]].extend(points)
 
     report = {
-        "heads": "hand-coded v0 (harness proof; Phase E swaps in the trained heads)",
-        "split_caveat": "single builder (the scripted generator) — the builder-level "
-                        "holdout is degenerate until real multi-session data exists",
+        "heads": "trained v1" if v1 else "hand-coded v0",
+        "data": ("labeled real captures (truth = builder category)" if real
+                 else "scripted corpus"),
+        "params": {"lambda_g": params.lambda_g, "lambda_z": params.lambda_z,
+                   "epsilon": params.epsilon},
+        "split_caveat": ("held-out real sessions are the load-bearing rows; the "
+                         "training holdout is pinned in heads_v1.json" if real else
+                         "single builder (the scripted generator) — the builder-level "
+                         "holdout is degenerate until real multi-session data exists"),
         "all_corrections": _reliability(pooled),
         "final_corrections_only": _reliability(finals),
         "per_goal": {goal: _reliability(points) for goal, points in by_goal.items() if points},
+        "mode_margin_at_choice_points": {
+            "mean": round(statistics.mean(all_margins), 4) if all_margins else None,
+            "points": len(all_margins),
+            "what": "belief-averaged P_delib(a|e,g) minus P_heur(a|e) at PLACE "
+                    "corrections (12-F8: trained heads must widen this)",
+        },
     }
-    out = os.path.join(_CORPUS, "calibration_report.json")
+    name = (f"calibration_report{'_real' if real else ''}{'_v1' if v1 else ''}"
+            f"{'_heldout' if held_out else ''}.json")
+    out = os.path.join(directory, name)
     with open(out, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
 
     overall = report["all_corrections"]
-    print(f"calibration report (v0 heads, scripted corpus) -> {os.path.relpath(out, _ROOT)}")
+    print(f"calibration report ({report['heads']}, {'REAL captures' if real else 'scripted corpus'})"
+          f" -> {os.path.relpath(out, _ROOT)}")
     print(f"  CAVEAT: {report['split_caveat']}")
     print(f"  all corrections: {overall['points']} points, ECE {overall['ece']}")
     for row in overall["bins"]:
@@ -124,6 +189,9 @@ def main() -> int:
               f" -> acc {row['empirical_accuracy']:.3f}  {bar}")
     final = report["final_corrections_only"]
     print(f"  final corrections only: {final['points']} sessions, ECE {final['ece']}")
+    margin = report["mode_margin_at_choice_points"]
+    print(f"  mode margin at choice points (12-F8): {margin['mean']}"
+          f" over {margin['points']} PLACE corrections")
     return 0
 
 

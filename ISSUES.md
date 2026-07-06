@@ -105,9 +105,338 @@ it; user to confirm whether it was intentional). FlowViz and all source code unt
   Write/Edit from the session logs (104 ops across 30 files). Two files needed hand repair from
   working context (a duplicated test body in test_voxel_replay.py; a half-applied width edit in
   test_pixel_head.py — its pairing edit likely lived in a subagent transcript).
-- [ ] **Exposure remains**: the last commit (f9cb9f1) is 2026-07-03 — two days of pipeline work
-  exists ONLY in the working tree. Recommendation to the user: a commit checkpoint (their call;
-  nothing is committed without their say-so).
+- [x] **Exposure CLOSED (same day)**: cause confirmed — the parallel agent-movement chat ran
+  `git stash -u` ("epitaxy: pre-switch from main"), which also explained a second full working-
+  tree revert hours later. Stash popped, 173 green re-verified, and per user instruction the
+  checkpoint was **committed and pushed (7e8c126, 101 files)**. Excluded from git with new
+  ignore rules: capture/youtube (11 GB mined clips), researchpapers/ (264 MB PDFs),
+  capture/rehearsal/, capture/reports/, .idea/. STANDING RULE: parallel chats work in their
+  own branch/worktree, never main's working tree.
+
+# 🔁 HYSTERESIS CORRECTED — D5 §3 PSEUDOCODE REWRITTEN, CODE ALIGNED, GATE REGENERATED (2026-07-06, user instruction; review P2-F2 closed, scope upgraded)
+
+The directed re-review found THREE defects where P2-F2 had recorded one: (1) the note's bare
+streak counter let MIXED-candidate flicker accumulate into authority (A,B,A,B reached M);
+(2) the hard veto was hysteresis-delayed — contradicting §4's "YIELD fires whenever the human
+is proximal" — and the code shared this (symmetric hold); (3) a read with conf below θ_place
+could keep PLACE_LOW_RISK standing for M−1 reads, committing under a failed check (latent in
+code; never fired only because PLACE never fired). One rule fixes all three, and it is the
+project's existing doctrine (D4 commit gate: "caution never waits, only authority does"):
+**downward lattice moves are immediate; upward moves need the SAME candidate on M consecutive
+reads.**
+
+Changed: D5 §3 pseudocode rewritten (lattice-ranked ApplyHysteresis + pending variable; dated
+old-vs-new amendment in the note); D4's hysteresis bullet amended to match; `LatticeHysteresis`
+replaces the symmetric `StreakHysteresis` (`mica/gate/fsm.py`; the old class removed from
+`commit.py`); 3 new tests (immediate veto, immediate confidence-dip drop, flicker never
+accumulates) — suite 257 green. Gate regenerated: **pass criteria ALL PASS**, blocking rates
+per group UNCHANGED (0.286/0.217/0.136/0.099 — the veto fires the same reads; only state
+persistence moved), YIELD shares up (validation 0.03→0.22: leaving YIELD is now an upward
+move, so the agent re-approaches only after M clean reads — boundary jitter gone), scattered
+PREVIEW holds collapsed (train-seen 0.03→0.00: mixed flicker no longer accumulates), mean
+K_commit unchanged (staircase untouched), committed actions still 0.
+
+# ✅ SEMANTICS RESOLVED — D5'S DISCOUNTED CONF IS THE CANONICAL OBSERVE/SUGGEST RULE (2026-07-06, user decision; review P2-F1 closed)
+
+The user picked D5 §3's form: SUGGEST iff conf = p*·(1−P_z1) ≥ θ_suggest. The FSM already
+implemented it and its frozen 0.277 was swept under it, so **gate behavior is unchanged** —
+verified by regenerating both artifact sets and comparing: decoder_report.json numbers
+identical (OQ1 1.0479/1.0574, coherence 0.1073/0.2163, parity, intervenability), gate rerun
+identical (same state shares, blocking rates, mean K_commit per group, ALL PASS). What
+changed is the bookkeeping, so θ_suggest now has exactly ONE home:
+- `mica/gate/commit.py`: `GateThresholds.theta_suggest` + its validator REMOVED — the
+  staircase owns K_commit only; the docstring points to fsm.py for state selection.
+- `scripts/run_decoder_eval.py`: the θ_suggest formula pin dropped from the sweep; the
+  raw-semantics `"suggest"` field dropped from decoder_commit_trace.jsonl rows —
+  gate_trace.jsonl (FSM) is the sole SUGGEST record.
+- `models/gate_v1.json` regenerated: "thresholds" without theta_suggest; "fsm" semantics
+  note records the resolution. `scripts/run_gate.py` note text updated (no logic change).
+- Tests: θ_suggest removed from staircase constructions; the old cross-quantity validator
+  test deleted (FsmConfig's θ_place > θ_suggest is the surviving constraint, already
+  tested). Suite 256 → 255 green, no failures.
+- Vault: D4's commit-gate bullet amended (dated old-vs-new; the old θ_suggest < θ(1)
+  inequality superseded STRUCTURALLY — the SUGGEST branch only runs when the staircase
+  committed nothing); D5 §10 conflict block closed; review P2-F1 marked resolved.
+
+# 🛡️ D5 EXECUTED — PHASE G PART 2: FSM + COUNTERFACTUAL GATE, ALL SAFETY CRITERIA PASS OVER 4,412 READS (2026-07-06, small hours)
+
+Opened by fixing the one outstanding defect first (review F6, root-caused before touching
+anything): `tokenizer.decode_chunk`'s "no actions" rejection traveled in the SAME shape as
+garbage rejections, so "the decoder says the build is done" was indistinguishable from
+malformed output. Smallest fix: `model.propose` finalization extracted into a pure
+`_finalize_chunk` helper returning a named `NOTHING_TO_DO` signal for the immediate-close
+case; B5 untouched (still no empty chunks); eval counts it separately (measured 0 on the
+banked eval — the current model over-proposes at build end instead, a data note, 250/12k
+empty-target training samples). Affected files: `mica/decoder/model.py`,
+`scripts/run_decoder_eval.py` (counter only — banked report numbers unchanged, provably),
+`tests/test_decoder_model.py` (three-outcome test).
+
+**Part 2 change log:**
+- `mica/gate/fsm.py` — D5 §3 made executable: hard proximity veto first (Euclidean 4-block
+  radius around the human OR target within 2 blocks of their focus — the §10 Q1 combination
+  pin, amended into D5), conf = p*·(1−P_z1) as the soft mode discount, safety lattice
+  OBSERVE/SUGGEST/PREVIEW/PLACE_LOW_RISK/YIELD, StreakHysteresis(M), EXECUTE_CHUNK
+  config-disabled (proven unreachable by test), PLACE_LOW_RISK config flag (counterfactual
+  on / first live demo off per D5 §9).
+- `scripts/run_gate.py` — the counterfactual run (D5 §8): per correction replays the v1
+  belief, asks the decoder, runs the staircase, lets the FSM choose; real train-seen thinned
+  ×5 (cost, recorded), every other group full-coverage. Player position + human standing
+  cells joined from the RAW session recordings (banked evidence doesn't carry them).
+- `tests/test_gate_fsm.py` — 11 tests (veto precedence, lattice, discount, hysteresis hold,
+  config flags, EXECUTE_CHUNK unreachability, snapshot fields). Suite 244 → 256 green.
+- **FSM freeze** (pre-registered rules → `models/gate_v1.json` "fsm" section): θ_suggest
+  0.277 (80th percentile of validation discounted conf), θ_place 0.377 (θ_suggest + 0.10),
+  M 3, radii 4.0/2.0. **Surfaced, not silently picked**: D4 words the OBSERVE/SUGGEST split
+  as raw p*, D5 §3 as discounted conf — the FSM follows D5 (owner note); both freezes are
+  labeled with their semantics; the conflict is recorded in D5 §10 for reconciliation.
+- Vault: D5 §10 amendments (proximity pin + semantics conflict); review-note Part 2 addendum
+  (P2-F1 conflict, P2-F2 hysteresis stricter than D5's literal pseudocode — the note's
+  version would commit on a flickering candidate, P2-F3 counterfactual proximity limits).
+
+**The trace (capture/raw/gate_trace.jsonl, 4,412 reads · gate_report.json · gate_states.png):**
+- **Pass criteria ALL PASS**: 0 under-threshold commits, 0 irreversible commits, 0
+  untraceable commits, 0 low-confidence placements. Every read carries its
+  belief_snapshot_id and its binding reason.
+- Chosen states: OBSERVE 0.78–0.97 everywhere; YIELD (proximity veto) 0.03–0.22 = the
+  blocking rate; PREVIEW 3% on real train-seen (mean K_commit 0.61 there); PLACE_LOW_RISK
+  fired ZERO times — θ_place 0.377 sits above what the underconfident calibrated belief
+  reaches (validation conf max 0.328), so placement authority is measured dormant, exactly
+  the D5 §9 first-demo posture, now as a number instead of a pin.
+- Candidate-vs-chosen gap = hysteresis at work: SUGGEST arises on 4–5% of real reads and
+  PLACE_LOW_RISK on up to 2.7% (train-seen), but no burst survived M=3 consecutive reads.
+  The gate is conservative because the belief flickers — the same data lever as everything
+  else (stronger heads → steadier candidates → states unlock; every artifact regenerates by
+  one command).
+
+Still open by design: Arm-0 legacy-mean neutral calibration (awaits the review question's
+answer + a legacy-gate baseline), the D4/D5 semantics reconciliation (user pick), and the
+live advisory demo (needs a human at the modded client; the gate now has everything it
+reads exposed via live_status.json per readiness-review F2).
+
+# 🔧 D4 EXECUTED — PHASE G PART 1: FROM-SCRATCH MTP DECODER + COMMIT GATE SHIPPED, GATE FROZEN AGAINST THE CALIBRATED HEADS (2026-07-05, late night)
+
+Started on user instruction the same night Phase F banked (C6's ordering satisfied). Pinned
+decisions honored: from-scratch decoder (17.5M as built, FastSceneScript regime), LOCAL-ONLY
+corpus v1 (AssistanceZero data = recorded follow-up; D4 note amended, dated old-vs-new). The
+backbone check (Phase G item one) is resolved-by-decision — nothing LLM-sized on disk, on
+purpose. `mica-review` ran BEFORE numbers (vault: `2026-07-05 - D4 Decoder and Commit Gate
+Review`); 244 tests green; no stream core touched (replay-equivalence re-run: PASS, exit 0).
+
+**New code (the change log):**
+- Contracts: `mica/contracts/b4.py` (ControlContext — the arm-swap slot, intervenable),
+  `b5.py` (ProposalChunk, conf_1:=1 enforced), `b6.py` (GateDecision enum + inputs_snapshot).
+- Decoder: `mica/decoder/grammar.py` (move/look/place/break/say, strict JSON + robust parser),
+  `tokenizer.py` (87-token language, τ=0/τ=2 agreement), `context.py` (C_η: evidence vector +
+  per-arm slot fills + belief-level `intervened_belief`), `model.py` (decoder-only trunk + MTP
+  retrofit: shared projection block, ONE token head, ONE agreement-trained confidence head;
+  C2-masked rationale head).
+- Corpus: `mica/data/decoder_corpus.py` + `scripts/make_decoder_corpus.py` → `capture/decoder/`
+  (12,209 samples, 125 sessions: 120 fresh seed-11 + 5 banked transfer; helper traces from
+  plans with mistake/redundant-click skip sets; per-sample hygiene REFUSALS; arm2 slots cached
+  over a pinned coverage subset).
+- Training: `scripts/train_decoder.py` (Stage A NTP → Stage B MTP; λ_h .8, λ_c .5, n≤8; equal
+  arm-mask ratios C5 + 15% counterfactual goal-slot sharpening) → `models/decoder_v1.pt/.json`
+  (+ stage-A checkpoint kept for OQ1).
+- Gate: `mica/gate/reversibility.py` (D5 §4 static table) + `mica/gate/commit.py` (K_commit
+  staircase, kernel-propagated belief, δ̂ freeze, p*_max fixed point + A-PRIORI reachability
+  hard-fail, +1/read and M-reads hysteresis, frozen masked-arm mappings) → `models/gate_v1.json`.
+- Eval: `scripts/run_decoder_eval.py` → `capture/raw/decoder_report.json`, `decoder_proposals.
+  jsonl` (955 chunks), `decoder_commit_trace.jsonl` (462 reads), 3 figures.
+- Tests: 46 new (grammar round-trips, parser/decode rejections, hygiene violations, C1
+  import-graph pin, C2 mask, staircase hand-checks, hysteresis, reachability, reversibility,
+  arm mappings, split-leak regression).
+
+**The numbers (all from decoder_report.json, one command):**
+- **OQ1 retrofit check (gating milestone): PASS** — Stage B one-step holdout NLL 1.0479 vs
+  Stage A 1.0574 (the retrofit HELPED — the FastSceneScript small-regime bet, measured);
+  coherence kept (0.107 vs 0.097); horizon-4 τ-accuracy 0.849 vs token chance 0.0115.
+- **C5 parity holds**: per-arm holdout NLL 1.047–1.049, proposal parse rate 1.0 in all four
+  slot conditions — the decoder cannot tell arms apart beyond intent content.
+- **Intervenability**: forcing the belief flips the argmax action on 48% of early ambiguous
+  scenes (truth-forced alignment 38%) — the slot has causal power, but modest (see the honest
+  caveat below).
+- **Gate frozen (calibrated v1 heads per the D5 §9 pin)**: δ̂ 0.29 s, p*_max 0.9954, a-priori
+  reachability PASS at every j≤8; c_min 0.95 (F1 sweep on 6,504 conf values), θ₁ 0.30,
+  slope 0.04, θ_suggest 0.22, M 3. K_commit over 462 counterfactual reads: mean 0.68,
+  distribution 0:268 / 1:105 / 2:66 / 3:18 / 4:4 / 5:1 — an OBSERVE/SUGGEST-leaning gate,
+  exactly what D5's first-demo authority pin prescribes.
+- **Honest caveats, recorded as measured**: (1) the calibrated v1 belief is NEAR-FLAT on
+  scripted evidence (p* ≤ 0.215; real validation peaks at 0.335) — so the corpus's live arm3
+  slots carried little goal signal and the counterfactual share did the conditioning work;
+  the original θ grid (≥0.35) was structurally dead and the sweep's hard-fail caught it
+  (review F8). (2) Absolute plan-coherence is weak (holdout 0.107 / banked transfer 0.216):
+  naming EXACT remaining cells from a 131-float context is information-limited by design.
+  Both share the standing lever: more matcher-agreed captures → stronger heads → regenerate
+  corpus (one command) → retrain (one command).
+- **Two bugs the harness caught before they could lie**: the banked transfer group leaked
+  into training via a split-routing bug (caught by the eval's own count printout; fixed,
+  RETRAINED, regression-tested — review F7); the token budget rejected 91% of proposals as
+  malformed instead of trimming to the complete-action prefix (fixed — review F9).
+
+Part 2 (next): D5 FSM + counterfactual `gate_trace.jsonl` wrapping this gate; Arm-0
+legacy-mean neutral calibration; then the live advisory demo path.
+
+# 📊 PHASE F EXECUTED — FOUR-ARM TABLE BANKED; THE PRE-REGISTERED EARLINESS BAR IS NOT MET ON NEVER-SEEN FREE BUILDS, BY ANY ARM (2026-07-05, night)
+
+The user chose Phase F before D4 (per the pinned plan order + D4-C6's artifact ordering; D4
+decisions recorded for Phase G: from-scratch 15–30M decoder, local-only corpus). Built same
+evening: the 06-note metric suite (`mica/validation/intent_metrics.py`), Arm 1 implicit
+classifier (`arm1.py` + trainer), Arm 2 LLM reader (`arm2.py`, local qwen2.5vl:7b, D4-S1
+confidence mapping, model-bound disk cache), stitched pivot sessions (`pivot_builds.py`), and
+the unified runner (`run_arms.py` — identical fused records to every arm, exposure-honest
+groups). **`mica-review` on the harness BEFORE quoting numbers**: 1 MAJOR (headline earliness
+was in step units; 06 defines build-progress units — both now reported, progress quoted),
+2 MINOR fixed (pivot seam moved to first new-goal evidence; Arm 2 cache bound to its model),
+3 NOTEs recorded → vault `2026-07-05 - Phase F Eval Harness Review`. 198 tests green.
+Arm 2 provenance: 2,022 queries + 980 cache hits, 12 unusable replies.
+
+**The table (held-out groups; sustained@build = build fraction when the call locks on):**
+- `scripted_holdout` (assigned layout, 5): floor acc 1.00 @0.33 · LLM acc 1.00 @0.49
+  (early-sep +0.024 PASS) · v0 tracker acc 1.00 @0.36 (+0.018 PASS) · v1 acc 0.40 · Arm 1 chance.
+- `real_never_seen` (free builds, 5): **every arm FAILS the pre-registered criterion** (mean
+  early separation > 0 before 40% of the build). Best final accuracy 0.20 (LLM, v0, v1 tied);
+  the structure floor drops to 0.00 with early-sep −0.23 (confidently wrong templates); v1 has
+  the least-bad earliness (0.881) and ECE 0.31.
+- Pivots (5 stitched, recovery = steps from first new-goal evidence): **v1 recovers 4/5**
+  (38–168 steps), v0 2/5, memoryless floor 3/5 (fast when the new template locks); Arm 1's
+  "instant" recoveries are near-uniform wobble, not tracking (single-goal metrics at chance).
+- Domain split worth remembering: v0 owns scripted symbolic (0.92 acc train-seen), v1 owns
+  real pixel-carrying sessions (0.75 train-seen) — each head works where its likelihoods were
+  shaped; the LLM reads clean scripted scenes well (0.76–1.00) and real free builds poorly (0.2).
+
+**The honest verdict, exactly as pre-registration demands**: on the CURRENT never-seen set the
+earliness claim fails for every mechanism — and the falsification clause says "across held-out
+builders" while this corpus has ONE builder and 5 never-seen sessions with lopsided categories.
+The result is a real, banked baseline table produced by a review-hardened harness, and it is
+PROVISIONAL: the same data bottleneck named at Phase E's close (more matcher-agreed captures)
+is what turns this table load-bearing. Artifacts: `capture/raw/arms_report.json` + 3 figures,
+one command (`run_arms.py`), Arm 2 cache makes reruns free.
+
+# 🚀 PHASE E EXECUTED — TRAINED HEADS v1 SHIPPED, BELIEF MOVES ON REAL PLAY FOR THE FIRST TIME (2026-07-05, evening)
+
+All four gate checkboxes ran the same day the gate opened. Every artifact regenerates from one
+command (D0 standard); 184 tests green (173 + 11 new); no stream core touched — golden
+equivalence untouched by construction.
+
+**1. Source B labeling pass** (`label_finished_builds.py`): scripted 30/30 kept, label accuracy
+1.0/1.0; real: 5 kept-and-agreed sessions wrote pairs (crop field 2359, treehouse-002717 724,
+tower 353, road 240, fountain 172 = **3,848 real pairs** + 3,098 scripted = 6,946), 4 contested
+wrote none (contest rule), 3 discarded (225251 near-tie margin 0.002 — the fit×comp key reads
+it fountain-vs-habitation; 113204 near-tie; 112050 below threshold). Honest note: the LOCAL VLM
+cross-check contested 4/6 kept verdicts (it reads tiny builds as "habitation") — recorded in
+the report; it never blocks pairs when builder+matcher agree, but it is currently too noisy to
+arbitrate. → `capture/scripted/source_b_report.json`.
+
+**2. B1-F3 stride probe** (`probe_sgoal_stride.py`, new — in-memory, banked artifacts untouched):
+s_goal at stride 1/6/20 over the 5 template + 2 clean free sessions. **The channel is FLAT at
+every stride** (aggregate margin +0.0046/+0.0043/+0.0043; early margins ≤0.0016; truth-first
+0.346 vs 0.2 chance). Stride 1 stays the corpus default (longer spans are WORSE — the F2
+multi-second hypothesis is dead); no regeneration needed. The CLIP4MC rung question is now
+formally live; the trained heads (below) measure what the raw cosines are worth in the
+meantime. Idle-precision frame sample banked in the report for eyeball review.
+→ `capture/raw/sgoal_stride_probe.json`.
+
+**3. Real-data reruns** (`run_tracker --real`, `probe_h3d_linear --real`, `probe_h3d_fusion
+--real` — leave-one-session-out, truth = builder category, 210003 quarantined-excluded):
+- **12-F3 verdict: the v0 hand-coded heads FAIL on real play** — fused final accuracy 0.100 vs
+  the structure-only floor's 0.500; behavior channels HURT (−0.073 earliness, −0.100 accuracy).
+  The scripted 0.416/0.933 numbers were the predicted pre-equip upper bound. This is the
+  strongest possible motivation for trained heads, banked as a baseline.
+- h3d linear probe on real embeddings: 0.289 overall vs 0.2 chance (early bins 0.375/0.333) —
+  weak-positive, throttled by N=10 with defense/production single-session categories.
+- **h3d fusion gate on real data: FAIL** (−0.100 accuracy, no earliness) — the readout weights
+  stay UNSHIPPED (`train_h3d_readout.py` still refuses); root cause is the v0 belief never
+  locking on at all (sustained-from ≈1.000 in every arm), not the embedding.
+→ `capture/raw/belief_summary_real.json`, `h3d_linear_probe_real.json`, `h3d_fusion_probe_real.json`.
+
+**4. Adapter v1 + heads TRAINED** (new: `mica/data/training_pairs.py` with the 09-F1 per-sample
+assertion — join verified, window-strictly-pre-action, built-count leak detector, all TESTED
+with constructed violations; `mica/intent/features.py` single-source featurizer;
+`mica/intent/adapter.py` torch model per the pinned architecture; `mica/intent/heads_v1.py`
+numpy inference behind the EXACT v0 `likelihood()` interface; `scripts/train_heads.py`).
+Training: NTP only (MTP ablation deferred per arm-fairness), sessions weighted equally,
+holdout = last scripted session per goal + fountain-134615; best val NLL 0.354; T_delib 1.4,
+T_heur 1.0, then the pinned (ε, λg, λz) grid through the REAL filter on holdout sessions chose
+ε 0.01, λg 0.02, λz 0.5 (NLPD 0.3395). Shipped `models/heads_v1.npz/.json` + training report.
+**heads_v1 is OPT-IN** (`--heads v1` on run_tracker/calibration_report); v0 stays the baseline
+arm and the live default.
+
+**The result, honestly split** (`belief_summary_real_v1.json`, `calibration_report_real_v1*.json`,
+per-session `*.belief_trace_v1.jsonl` + `belief_traces_v1.png`):
+- Pooled 10 real sessions: fused 0.400 final accuracy (v0: 0.100), sustained-from 0.882 (v0:
+  1.000); BOTH channel contributions turned positive (+0.100 accuracy each). p_top finally
+  leaves the 0.20–0.26 dead band — reliability mass now sits at 0.4–0.7 confidence, and where
+  v1 says ≥0.54 it is right 100% of the time (underconfident, the safe direction).
+- Trained-on 4 sessions: 3/4 final-correct (road sustained from 55% progress) — the heads work
+  where they have seen the category's data.
+- **Never-seen 6 sessions: 1/6** — but that one is a real generalization win: the fancy
+  fountain (113204, never trained, contested-by-matcher) read correctly from **38% progress**.
+  Held-out ECE 0.1199 (v0's 0.0812 is cheaper-but-empty calibration: it never claims anything).
+- **12-F8 partial**: the mode margin at choice points widened ~28× in magnitude but INVERTED
+  (v0 +0.003 → v1 −0.084): Q_heur, trained only on shortcut sessions, over-favors placement, so
+  P(z=1) inflates during building bursts. Recorded as a finding; needs more deliberate-mode
+  variety, not a code fix.
+
+**The Phase E conclusion: the machinery is DONE and the belief layer is now model-driven; the
+remaining gap is DATA, exactly as D3 predicted.** 5 pairs-eligible real sessions (4 trainable)
+cannot cover 5 categories × free-build variety. The lever is more template-exact captures +
+free builds that the matcher can agree on — each new agreed session is ~200-2000 more pairs.
+Next: more captures, then retrain (one command), then the Phase F four-arm comparison.
+
+# 🎉 TEMPLATE GATE COMPLETE (5/5) — PHASE E DATA GATE OPEN (2026-07-05, afternoon)
+
+Session `fabric-20260705-134615`: the exact 18-block fountain — **matcher-agrees at fit 1.00
+comp 1.00**, replay a=8 b=0 c=0, 0 escapes, 31/31 events, 96% pixel-enriched, third fully-clean
+live run; scan 21/21 covered at cosine 0.9465 (a fifth convergence point) before the agent was
+kicked again mid-session (kicker unconfirmed; capture unaffected — the mind records regardless).
+
+**The five template captures are banked**: production (crop field, comp 1.00) · habitation
+(fit 1.00, style caveat) · infrastructure (road/flat span, category-agreed) · defense (square
+tower, fit 0.89) · decorative (fountain, 1.00/1.00). Plus five labeled free builds as the
+evaluation set. Phase E's standing sequence is now unblocked:
+- [x] Source B labeling pass over the corpus (pairs from the template + agreed sessions)
+- [x] B1-F3 early-separation probe (s_goal stride 1/6/20 on real captures)
+- [x] 12-F3 fused-arm rerun + both h3d probe reruns on real data
+- [x] Train A_φ + heads against the calibration harness (the λ grid + pinned architecture)
+(All four executed same day — see the PHASE E EXECUTED block above.)
+
+# ✅ THREE LOG-ONLY SESSIONS MATERIALIZED — TEMPLATE GATE AT 4/5 (2026-07-05, afternoon)
+
+Sessions 131308/131826/132647 were built while the rig was down (the agent kick incident:
+MICA_AI kicked with disconnect.genericReason from three worlds; no second bot process or code
+change on this machine — source external, likely the parallel chat's game activity; our rig was
+stopped to end the loop). They recorded LOG-ONLY — and the offline-first architecture proved
+itself: `run_d2 --h3d` + `run_d1 --pixels` regenerated every structured field (h2d/s_goal/h3d/
+structure/fused-ready evidence) deterministically from raw. All three: replay c=0, 0 escapes,
+all events consumed, ~92% pixel-enriched. Only the agent scan is absent (embodied sensor — the
+agent wasn't present; recorded honestly, never faked).
+- [x] **131308 — infrastructure ✓ SLOT FILLED**: builder "highway road", matcher flat span
+  fit 0.78 comp 0.85 (sibling infra styles; category doubly attested).
+- [x] **131826 — defense ✓ SLOT FILLED, matcher-agrees**: square tower both sides, fit 0.89 —
+  the second full agreement after the crop field.
+- [x] **132647 — decorative contested**: builder "weird decorative building", matcher
+  defense/perimeter wall (fit 0.82; 50 class-b = ~25 two-block items). No pairs; strong
+  evaluation-set material.
+- [ ] **TEMPLATE TALLY: production ✓, habitation ✓(caveat), infrastructure ✓, defense ✓ —
+  DECORATIVE remains**: exactly the 18-block fountain (5×5 ring one high + 2-high center
+  column). One small build opens Phase E's data gate.
+- [x] Coordination rules re-stated after the kick incident: parallel chat's bot joins as
+  MICA_AI_2 (replica support is built into the actor contract); its code work lives in its own
+  branch/worktree; game time is one chat at a time.
+
+# ✅ SESSION 113204 (FANCY FOUNTAIN) + THE TEMPLATE-EXACTNESS LESSON (2026-07-05)
+
+- [x] Second fully-clean LIVE run (no quarantine, exit 0); replay a=106 b=0 c=0, 0 escapes;
+  D1/D2 PASS (72/72 events, **97% pixel-enriched** — the pre-warm at full effect). Scan:
+  86% coverage, cosine 0.8936 — the convergence curve now has four real points
+  (29%→0.55, 83%→0.73, 86%→0.89, 100%→0.98), monotone throughout.
+- [x] **Label: decorative/fountain (builder) — matcher contested CONFIDENTLY** (habitation/cabin,
+  fit 0.83): a 44-cell fountain with raised basin walls is geometrically a roofless cabin. No
+  pairs. **The lesson, now 3-of-4 attempts: template captures must be the LITERAL template
+  shapes** — the matcher certifies geometry, not intent. Slots still open: infrastructure
+  (EXACTLY 7×3 deck + two 7-long rails at +1), defense (3×3 ring ×6 + 3×3 cap), decorative
+  (EXACTLY 5×5 ring one high + 2-high center column, 18 blocks, nothing more). Free builds
+  remain valuable as the evaluation set — but they cannot fill template slots.
 
 # ✅ SESSION 112050 (BRIDGE) CLOSED — REGION v3 PROVEN + SCAN AT COSINE 0.98 (2026-07-05)
 

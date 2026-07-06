@@ -55,6 +55,18 @@ def _flag_value(name: str, default: int) -> int:
     return default
 
 
+def provenance_pin(directory: str) -> dict | None:
+    """Same rule as make_scripted_corpus.provenance_pin: a pinned bank predates the
+    motion-default generator change (2026-07-06) and is refused until cascade A
+    (or an explicit --unpin) — overwriting it would orphan the trained decoder and
+    the gate artifacts listed in the pin."""
+    path = os.path.join(directory, "PROVENANCE_PIN.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def _fused_for_build(build):
     """One generated session's verified fused records (same path as the perception
     corpus generator, contract checks included)."""
@@ -90,6 +102,19 @@ def _banked_holdout_ids() -> list[str]:
 
 
 def main() -> int:
+    pin = provenance_pin(_OUT)
+    if pin is not None and "--unpin" not in sys.argv:
+        print("REFUSED: the banked decoder corpus carries a provenance pin —")
+        print(f"  {pin['generator']}")
+        print(f"  {pin['verified_mismatch']}")
+        print("  regenerating now would orphan: " + ", ".join(
+            pin["consumers_trained_on_this_bank"]))
+        print("  This is cascade A work (see the pin file); pass --unpin to proceed.")
+        return 1
+    if pin is not None:
+        os.remove(os.path.join(_OUT, "PROVENANCE_PIN.json"))
+        print("provenance pin removed (--unpin): regenerating under the CURRENT generator")
+
     per_goal = _flag_value("--per-goal", _PER_GOAL)
     seed = _flag_value("--seed", _SEED)
     skip_arm2 = "--skip-arm2" in sys.argv

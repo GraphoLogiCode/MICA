@@ -113,6 +113,46 @@ it; user to confirm whether it was intentional). FlowViz and all source code unt
   capture/rehearsal/, capture/reports/, .idea/. STANDING RULE: parallel chats work in their
   own branch/worktree, never main's working tree.
 
+# ⚠️ VERIFIED BROKEN — NO-FLAG CORPUS REGENERATION NO LONGER REPRODUCES THE BANKS (2026-07-06, verification on user request; finding recorded, NO regeneration performed)
+
+Measured in memory, banks untouched. `make_scripted_corpus.py` no-flag vs the banked
+`capture/scripted/`: **30/30 sessions mismatch** (e.g. cabin-7000: 292 fresh B1 records vs 217
+banked; longhouse-7004: 381 vs 261). Decoder corpus same: fountain-11023 regenerates to 80
+corrections vs 64 banked (+25%).
+
+**Root cause**: the merged motion PR (aeee7c7, "choreographed builder motion") keeps the
+engine opt-in (`ScriptedBuild.motion=None` = byte-identical static) but `build_from_plan` now
+opts EVERY scripted plan in — so the default generation path changed under the pinned rule
+"no-flag reproduces the banked corpus." The banks on this machine were never regenerated
+(evidence mtimes 07-02/07-04 predate the merge): both `capture/scripted/` AND
+`capture/decoder/` are STATIC-generator data. (Archaeology note: static evidence SHOWS short
+inspect runs and 1-tick focus dwells — the pitch-snap artifact around each placement — so
+those are NOT motion signatures; absent walking / all-zero pos_delta is the reliable tell.)
+
+**What this means**: every Phase E–G artifact (source_b pairs, heads_v1, arm1, arms_report,
+decoder corpus, decoder_v1, gate traces) is mutually consistent on static data, and the banks
+still reproduce under pre-merge code (the 7e8c126 era generator). Only the forward property is
+broken: today's no-flag command generates richer motion data that matches no bank.
+
+**DECIDED (2026-07-06, user): B now, A scheduled.** Executed same day:
+- **Load-bearing pins**: `capture/scripted/PROVENANCE_PIN.json` + `capture/decoder/
+  PROVENANCE_PIN.json` record the static-generator provenance, the verified mismatch, and
+  every model trained on each bank.
+- **Refuse-loudly guards**: `make_scripted_corpus.py` and `make_decoder_corpus.py` now exit 1
+  while a pin stands, naming what a regeneration would orphan; `--unpin` is the explicit
+  escape and deletes the pin (cascade-A entry point). 3 new tests
+  (`tests/test_provenance_pin.py`); the pins can't rot silently.
+- **CASCADE A scheduled**, bundled with the retrain the next batch of matcher-agreed captures
+  forces anyway (one cascade pays for both improvements): --unpin regenerate perception
+  corpus → relabel (label_finished_builds) → train_heads → train_arm1 → run_arms →
+  --unpin make_decoder_corpus (fresh arm2 LLM queries, hours) → train_decoder →
+  run_decoder_eval → run_gate — every step one command; run as its own recorded phase step
+  with before/after tables so the motion effect stays attributable.
+- **Standing caveat until cascade A**: `run_arms.py` (pivot sessions) and `run_gate.py`
+  (decoder-holdout branch) regenerate sessions IN MEMORY — on current code those come out
+  motion-choreographed and inconsistent with the static banks. Don't rerun them expecting
+  banked-identical results; the pins guard disk regeneration only.
+
 # 🔁 HYSTERESIS CORRECTED — D5 §3 PSEUDOCODE REWRITTEN, CODE ALIGNED, GATE REGENERATED (2026-07-06, user instruction; review P2-F2 closed, scope upgraded)
 
 The directed re-review found THREE defects where P2-F2 had recorded one: (1) the note's bare

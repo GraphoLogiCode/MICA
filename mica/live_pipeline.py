@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Protocol, TextIO
@@ -89,6 +90,30 @@ class PipelineCounts:
     gate_problem_lines: int = 0
 
 
+class StallMeter:
+    """Worst and mean wall time of one repeated step. The live loop runs on one
+    thread with a 3.2 s socket buffer behind it; every real session since the GPU
+    heads joined has dropped packets, and without these numbers nobody can say
+    which step is eating the budget. Timing only — records never carry it, so
+    golden equivalence is untouched."""
+
+    def __init__(self):
+        self.count = 0
+        self.total_ms = 0.0
+        self.worst_ms = 0.0
+
+    def add(self, ms: float) -> None:
+        self.count += 1
+        self.total_ms += ms
+        if ms > self.worst_ms:
+            self.worst_ms = ms
+
+    def to_dict(self) -> dict:
+        return {"count": self.count,
+                "mean_ms": round(self.total_ms / self.count, 2) if self.count else 0.0,
+                "worst_ms": round(self.worst_ms, 2)}
+
+
 class LivePipeline:
     """Feed moments in tick order (the live ingest guarantees that); read logs out."""
 
@@ -118,11 +143,17 @@ class LivePipeline:
         self._h3d_norm: float | None = None
         self._h3d_records = 0
         self._h3d_cells: int | None = None
+        # Where the per-tick time goes (see StallMeter): every moment, the heavy
+        # correction step (D2 + fuse + tracker, h3d inside D2's cache), and the
+        # pixel head's bounded enrich wait. The runner adds gate + snapshot meters.
+        self.stalls = {"moment": StallMeter(), "correction": StallMeter(),
+                       "enrich": StallMeter()}
 
     # ------------------------------------------------------------------ per moment
 
     def on_moment(self, packet, frame: bytes | None) -> tuple[str, ...]:
         """Process one tick; returns any problems this tick made visible (for display)."""
+        started = time.perf_counter()
         self.last_tick = packet.tick
         problems = self._gate.check(packet)
         if problems:
@@ -138,6 +169,7 @@ class LivePipeline:
             self._d2.harvest(packet)
         for record in self._d1.feed(packet):
             self._on_record(record)
+        self.stalls["moment"].add((time.perf_counter() - started) * 1000.0)
         return problems
 
     def on_snapshot(self, snap_tick: int, cells: dict, region=None) -> list:
@@ -190,7 +222,9 @@ class LivePipeline:
 
     def _on_record(self, record: Evidence2D) -> None:
         if record.scored and self._config.pixel_head is not None:
+            started = time.perf_counter()
             record = self._config.pixel_head.enrich(record, tuple(self._frames))
+            self.stalls["enrich"].add((time.perf_counter() - started) * 1000.0)
         if record.h2d is not None:
             self._h2d_norm = math.sqrt(sum(v * v for v in record.h2d))
         if record.s_goal is not None:
@@ -212,6 +246,7 @@ class LivePipeline:
             self._consumed.add(event_id)
         if self._d2 is None:
             return                            # D1-only: no structure, no fusion, no belief
+        correction_started = time.perf_counter()
         b2 = self._d2.on_correction(record)
         if b2.h3d is not None:
             self._h3d_norm = math.sqrt(sum(v * v for v in b2.h3d))
@@ -222,6 +257,7 @@ class LivePipeline:
             self._h3d_cells = b2.global_feats.built_count
         self._emit(self._config.sinks.evidence3d, evidence3d_to_dict(b2))
         fused = fuse(record, b2)              # raises on a join mismatch — a pipeline bug
+        self._last_fused = fused              # retained for the D5 gate's reads only
         self._emit(self._config.sinks.fused, fused_to_dict(fused))
 
         # The tracker step, exactly as run_tracker does it: one predict over the whole
@@ -236,6 +272,7 @@ class LivePipeline:
         self.counts.corrections += 1
         self._emit(self._config.sinks.belief,
                    belief_to_dict(fused.tick, "correction", self._belief, normalizer))
+        self.stalls["correction"].add((time.perf_counter() - correction_started) * 1000.0)
 
     def _drift_line(self, record: Evidence2D) -> None:
         """Display-only belief between corrections: predict on a throwaway, never stored."""
@@ -247,6 +284,17 @@ class LivePipeline:
         self._emit(self._config.sinks.belief, belief_to_dict(tick, "drift", drifted))
 
     # ------------------------------------------------------------------ readouts
+
+    @property
+    def belief(self):
+        """The authoritative belief, read-only — the D5 gate's input."""
+        return self._belief
+
+    @property
+    def last_fused(self):
+        """The most recent fused correction (None before the first) — the gate's
+        evidence-side context. Retention only; every emission is untouched."""
+        return getattr(self, "_last_fused", None)
 
     def status(self) -> dict:
         """One line's worth of live state for the runner's ~1 Hz stdout readout —
@@ -299,6 +347,8 @@ class LivePipeline:
             # Evidence blindness: events the FEATURE world had to discard because the
             # build left the capture region — D2 reads zeros while this is nonzero.
             "crop_escapes": self._d2.crop_escapes if self._d2 is not None else 0,
+            # Where the single thread's time went — the gap post-mortem's first read.
+            "timings": {name: meter.to_dict() for name, meter in self.stalls.items()},
         }
 
     # ------------------------------------------------------------------ helpers

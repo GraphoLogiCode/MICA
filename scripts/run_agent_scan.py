@@ -32,6 +32,7 @@ from mica.perception.voxel_replay import (                             # noqa: E
 )
 
 _COSINE_STEPS = 10   # sample the embedding-convergence curve at ~deciles of the scan
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _flag(name: str, default):
@@ -40,15 +41,32 @@ def _flag(name: str, default):
     return default
 
 
-def _built_set(jsonl: str, session) -> dict:
-    """The exact built set: pre-build base + the session's HUMAN events (A7)."""
+def _scan_candidates(jsonl: str) -> list[str]:
+    """Agent scan files are written next to a LIVE session — the flat raw root.
+    A relocated session's dated dir holds none, so the repo root is searched as
+    the FALLBACK; scans sitting right next to the session always win (a test's
+    own fixture must never lose to a real scan at the repo root)."""
+    here = os.path.dirname(os.path.abspath(jsonl))
+    root = os.path.join(_ROOT, "capture", "raw")
+    local = sorted(glob.glob(os.path.join(here, "agent-*.scan*.jsonl")),
+                   key=os.path.getmtime)
+    if os.path.abspath(here) == os.path.abspath(root):
+        return local
+    extra = sorted(glob.glob(os.path.join(root, "agent-*.scan*.jsonl")),
+                   key=os.path.getmtime)
+    return local + extra
+
+
+def _built_set(jsonl: str, session) -> dict | None:
+    """The exact built set: pre-build base + the session's HUMAN events (A7).
+    None when the session has no region/snapshots (D1-only) — nothing to scan against."""
     region = region_from_manifest(session)
     snap_dir = os.path.join(os.path.dirname(os.path.abspath(jsonl)),
                             session.manifest.session_id, "snapshots")
     snapshots = sorted(glob.glob(os.path.join(snap_dir, "*.json")),
                        key=lambda p: int(os.path.basename(p)[:-5]))
     if region is None or not snapshots:
-        raise SystemExit("session has no region/snapshots - not D2-ready, no scan report")
+        return None
     _, _, base = load_snapshot(snapshots[0])
     world = ReplayWorld(region, dict(base))
     for packet in sorted(session.packets, key=lambda p: p.tick):
@@ -74,37 +92,48 @@ def main() -> int:
         print(__doc__)
         return 1
     jsonl = positional[0]
+    if not os.path.exists(jsonl) and not jsonl.endswith(".jsonl"):
+        # A bare session id: the layout-aware resolver finds it (dated or flat).
+        from mica.capture.session_store import session_dir
+        jsonl = os.path.join(session_dir(jsonl), f"{jsonl}.jsonl")
     scan_arg = _flag("--scan", None)
-    if scan_arg is None:
-        candidates = sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(jsonl)),
-                                                   "agent-*.scan*.jsonl")), key=os.path.getmtime)
-        if not candidates:
-            print("no agent scan file found next to the session (agent-*.scan*.jsonl)")
-            return 1
-        scan_arg = candidates[-1]
 
     session = JsonlSource(jsonl, jsonl.replace(".jsonl", ".manifest.json")).load()
     built = _built_set(jsonl, session)
+    if built is None:
+        # A session without region/snapshots is D1-only — there is no build to
+        # scan against. Not an error: the chain must keep going.
+        print("session has no region/snapshots (D1-only) — no scan report")
+        return 0
     # The newest scan file can already belong to the NEXT session (the agent rotates
     # its file per launch, and reports often run while a new world is open — a real
     # report once paired a bridge session with the next world's spawn-area scan).
-    # Without --scan, pair by wallclock: of the scans that STARTED after this
-    # session began, the earliest is this session's own agent.
-    if "--scan" in sys.argv:
+    # Without --scan: a scan file NAMED with this session id is an exact match (the
+    # agent tags its sweeps and rotates by session id) and always wins. Only the
+    # older, untagged files fall back to pairing by wallclock: of the scans that
+    # STARTED after this session began, the earliest is this session's own agent.
+    if scan_arg is not None:
         sweeps = load_scan(scan_arg)
     else:
+        session_id = session.manifest.session_id
+        named = [candidate for candidate in _scan_candidates(jsonl)
+                 if f".scan.{session_id}" in os.path.basename(candidate)]
+        if named:
+            scan_arg = named[-1]                 # candidates are mtime-sorted: newest
+            sweeps = load_scan(scan_arg)
         start_s = session.manifest.session_start_ms / 1000.0
-        candidates = sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(jsonl)),
-                                                   "agent-*.scan*.jsonl")), key=os.path.getmtime)
-        scan_arg, sweeps = None, []
-        for candidate in candidates:
-            trial = load_scan(candidate)
-            if trial and trial[0].ts >= start_s:
-                scan_arg, sweeps = candidate, trial
-                break
         if scan_arg is None:
-            print("no agent scan overlaps this session's wallclock - no scan report")
-            return 1
+            sweeps = []
+            for candidate in _scan_candidates(jsonl):
+                trial = load_scan(candidate)
+                if trial and trial[0].ts >= start_s:
+                    scan_arg, sweeps = candidate, trial
+                    break
+        if scan_arg is None:
+            # No agent joined this session — absence of a scan is a fact, not a
+            # failure; the post-session chain must not stop here.
+            print("no agent scan overlaps this session's wallclock — no scan report")
+            return 0
     scanned_total = accumulate(sweeps)
 
     # The coverage curve: after each sweep, how much of the build has been seen.

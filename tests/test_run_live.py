@@ -108,6 +108,9 @@ def test_live_mode_end_to_end_over_a_real_socket(tmp_path, monkeypatch):
     assert report["gate_live"]["clean"] is True
     assert report["ingest"]["gap_ticks"] == 0 and report["ingest"]["duplicates"] == 0
     assert report["records"]["corrections"] == report["records"]["scored"] > 0
+    assert report["proof_grade"] is True               # the D6 §9 verdict, persisted
+    assert report["timings"]["moment"]["count"] == len(dicts)
+    assert report["timings"]["correction"]["count"] == report["records"]["corrections"]
     assert os.path.exists(f"{base}.d2_provenance.json")
 
     # the live-written logs must be exactly what the offline wrappers produce
@@ -173,94 +176,14 @@ def test_feeder_grow_mode_stages_an_empty_jsonl(tmp_path, monkeypatch):
     assert manifest["snapshot_region"] == list(_REGION)
 
 
-def test_feeder_grow_mode_stages_an_empty_jsonl(tmp_path, monkeypatch):
-    # --grow-jsonl rehearses the mod's parallel disk write: the staged session file
-    # starts EMPTY and fills as the feed plays, so a mid-feed attach catches up from
-    # a true prefix instead of reading the whole finished recording.
-    import replay_live_feed
-
-    dicts, declared = _packet_dicts()
-    jsonl = _lay_out_capture_dir(tmp_path, dicts, declared)
-    monkeypatch.setattr(replay_live_feed, "_REHEARSAL", str(tmp_path / "rehearsal"))
-
-    staged, _ = replay_live_feed._stage(jsonl, grow=True)
-    assert os.path.getsize(staged) == 0
-    # the manifest still stages whole — run_live needs its region to seed
-    manifest = json.loads(open(os.path.join(os.path.dirname(staged),
-                                            f"{_SID}.manifest.json"), encoding="utf-8").read())
-    assert manifest["snapshot_region"] == list(_REGION)
-
-
-def test_live_mode_attaches_to_a_named_session(tmp_path, monkeypatch):
-    # --session skips freshness discovery entirely: the rehearsal path, where the
-    # attached session is a staged COPY whose mtime is old by construction.
-    dicts, declared = _packet_dicts()
-    jsonl = _lay_out_capture_dir(tmp_path, dicts, declared)
-    port = _serve_wire(dicts)
-    monkeypatch.setattr(run_live, "_RAW", str(tmp_path / "somewhere-else"))
-    monkeypatch.delenv("MICA_PIXELS", raising=False)
-    monkeypatch.delenv("MICA_H3D", raising=False)
-
-    assert run_live._live("127.0.0.1", port, session_arg=jsonl) == 0
-    assert os.path.exists(jsonl[: -len(".jsonl")] + ".live_run.json")
-
-
-def test_feeder_stages_a_complete_clone_and_never_touches_the_source(tmp_path, monkeypatch):
-    import replay_live_feed
-
-    dicts, declared = _packet_dicts()
-    jsonl = _lay_out_capture_dir(tmp_path, dicts, declared)
-    before = {path: os.path.getmtime(path) for path in
-              [jsonl, jsonl.replace(".jsonl", ".manifest.json")]}
-    monkeypatch.setattr(replay_live_feed, "_REHEARSAL", str(tmp_path / "rehearsal"))
-
-    staged, pending = replay_live_feed._stage(jsonl)
-    stage_dir = os.path.dirname(staged)
-    assert staged != jsonl and str(tmp_path / "rehearsal") in staged
-    assert os.path.exists(os.path.join(stage_dir, f"{_SID}.manifest.json"))
-    # only the BASE snapshot is staged up front — later ones drip in mid-feed, so
-    # run_live seeds exactly the world a real attach would see
-    assert os.path.exists(os.path.join(stage_dir, _SID, "snapshots", "0.json"))
-    assert pending == []                      # this fixture has just the base snapshot
-    for path, mtime in before.items():        # the raw source is never written
-        assert os.path.getmtime(path) == mtime
-    assert replay_live_feed._stage(jsonl)[0] == staged   # restages clean to the same path
-
-
-def test_live_mode_attaches_to_a_named_session(tmp_path, monkeypatch):
-    # --session skips freshness discovery entirely: the rehearsal path, where the
-    # attached session is a staged COPY whose mtime is old by construction.
-    dicts, declared = _packet_dicts()
-    jsonl = _lay_out_capture_dir(tmp_path, dicts, declared)
-    port = _serve_wire(dicts)
-    monkeypatch.setattr(run_live, "_RAW", str(tmp_path / "somewhere-else"))
-    monkeypatch.delenv("MICA_PIXELS", raising=False)
-    monkeypatch.delenv("MICA_H3D", raising=False)
-
-    assert run_live._live("127.0.0.1", port, session_arg=jsonl) == 0
-    assert os.path.exists(jsonl[: -len(".jsonl")] + ".live_run.json")
-
-
-def test_feeder_stages_a_complete_clone_and_never_touches_the_source(tmp_path, monkeypatch):
-    import replay_live_feed
-
-    dicts, declared = _packet_dicts()
-    jsonl = _lay_out_capture_dir(tmp_path, dicts, declared)
-    before = {path: os.path.getmtime(path) for path in
-              [jsonl, jsonl.replace(".jsonl", ".manifest.json")]}
-    monkeypatch.setattr(replay_live_feed, "_REHEARSAL", str(tmp_path / "rehearsal"))
-
-    staged, pending = replay_live_feed._stage(jsonl)
-    stage_dir = os.path.dirname(staged)
-    assert staged != jsonl and str(tmp_path / "rehearsal") in staged
-    assert os.path.exists(os.path.join(stage_dir, f"{_SID}.manifest.json"))
-    # only the BASE snapshot is staged up front — later ones drip in mid-feed, so
-    # run_live seeds exactly the world a real attach would see
-    assert os.path.exists(os.path.join(stage_dir, _SID, "snapshots", "0.json"))
-    assert pending == []                      # this fixture has just the base snapshot
-    for path, mtime in before.items():        # the raw source is never written
-        assert os.path.getmtime(path) == mtime
-    assert replay_live_feed._stage(jsonl)[0] == staged   # restages clean to the same path
+def test_flag_values_are_never_mistaken_for_session_paths():
+    # The bug the rehearsal caught: "--heads v1" leaked "v1" into the positionals,
+    # so the documented live command routed into replay mode and crashed on a
+    # session file named "v1". Every value-taking flag must be in _VALUE_FLAGS.
+    assert run_live._positionals(["run_live.py", "--heads", "v1"]) == []
+    assert run_live._positionals(["run_live.py", "--session", "x.jsonl", "--heads", "v1"]) == []
+    assert run_live._positionals(["run_live.py", "s.jsonl", "--gate", "--heads", "v1"]) == ["s.jsonl"]
+    assert run_live._positionals(["run_live.py", "--host", "h", "--port", "1", "s.jsonl"]) == ["s.jsonl"]
 
 
 def test_reseed_structure_recovers_from_a_moved_provisional_region():
@@ -321,5 +244,6 @@ def test_live_mode_survives_a_dropped_moment(tmp_path, monkeypatch):
     report = json.loads(open(jsonl[: -len(".jsonl")] + ".live_run.json", encoding="utf-8").read())
     assert report["gate_live"]["tick_gaps"]["missing_ticks"] == 1
     assert report["gate_live"]["clean"] is False       # honest: not proof-grade
+    assert report["proof_grade"] is False              # and the verdict says so
     assert report["gate_on_disk_pass"] is True         # the disk copy is complete
     assert report["quarantined"] is False

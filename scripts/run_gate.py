@@ -133,9 +133,20 @@ def _freeze_fsm_config(gate_meta: dict) -> tuple[FsmConfig, dict]:
     validation_id = sorted(_REAL_VALIDATION)[0]
     fused = _load_banked_fused(validation_id)
     beliefs = decoder_corpus.replay_beliefs(fused)
-    confs = sorted(
-        slot["p_top"] * (1.0 - slot["p_z1"])
-        for slot in (context_builder.arm3_slot(b) for b in beliefs))
+    slots = [context_builder.arm3_slot(b) for b in beliefs]
+    confs = sorted(slot["p_top"] * (1.0 - slot["p_z1"]) for slot in slots)
+    # Arm-0's legacy-mean neutral (D4 gate block; review F2): measure note 05's
+    # two-scalar gate on the same validation beliefs, derive the fixed neutral.
+    theta_1 = gate_meta["thresholds"]["theta_1"]
+    legacy_mean = commit.legacy_gate_mean([s["p_top"] for s in slots],
+                                          [s["p_z1"] for s in slots], theta_1)
+    arm0_neutral = commit.derive_arm0_neutral(legacy_mean, theta_1)
+    commit.set_arm0_neutral(arm0_neutral)
+    gate_meta["arm0_neutral"] = {
+        "value": arm0_neutral, "legacy_gate_mean_commit": round(legacy_mean, 4),
+        "rule": "legacy = p* > theta(1) AND P(z=1) < 0.5 on validation reads; a "
+                "constant reproduces the mean by its side of 0.5 (derivation in "
+                "commit.derive_arm0_neutral)"}
     at = min(len(confs) - 1, int(len(confs) * _SUGGEST_PERCENTILE))
     theta_suggest = round(confs[at], 3)
     theta_place = round(theta_suggest + 0.10, 3)

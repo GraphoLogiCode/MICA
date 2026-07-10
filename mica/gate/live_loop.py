@@ -1,0 +1,304 @@
+"""The D5 live gate loop: one gate read per ~1 Hz display tick, in-world.
+
+This is the last D5 piece — the same staircase + FSM the counterfactual run proved,
+now fed by the LIVE belief. The runner is deliberately dumb plumbing: run_live hands
+it the pipeline's authoritative belief, the last fused correction, and the status
+read-offs; it asks the decoder for a proposal, runs the frozen staircase and FSM,
+flushes one gate_trace row, and returns the small "gate" block live_status.json
+carries so the embodiment can render the state.
+
+Demo authority (D5 §9 pin): PLACE_LOW_RISK is CONFIG-DISABLED here — the first live
+demo is observe/suggest/preview only. Nothing in this module executes anything;
+rendering is the agent's, authority stays with the human.
+
+Degradation is a state, not a crash: no decoder on disk, or no correction yet, reads
+as OBSERVE with the reason saying so.
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+
+from ..contracts.b0 import BlockOp, is_agent_actor
+from ..decoder import context as context_builder
+from ..decoder import model as decoder_model
+from ..decoder.grammar import Say
+from ..intent.tracker import predict
+from . import commit, fsm, materials, reversibility
+
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_GATE_META = os.path.join(_ROOT, "models", "gate_v1.json")
+_MAX_ACTIONS = 8
+
+
+def gate_ready() -> bool:
+    return decoder_model.available() and os.path.exists(_GATE_META)
+
+
+class LiveGateRunner:
+    """Feed me events as they arrive and call read() once per display tick."""
+
+    def __init__(self, trace_path: str, params, demo: bool = True,
+                 preload: bool = False, materials_source=None):
+        with open(_GATE_META, encoding="utf-8") as handle:
+            meta = json.load(handle)
+        self.staircase = commit.GateThresholds(**meta["thresholds"])
+        self.delta_hat = meta["delta_hat"]["delta_hat_seconds"]
+        self.fsm = fsm.GateFsm(fsm.FsmConfig(
+            theta_suggest=meta["fsm"]["theta_suggest"],
+            theta_place=meta["fsm"]["theta_place"],
+            m_consecutive=meta["thresholds"]["m_consecutive"],
+            place_low_risk_enabled=not demo))     # the §9 demo pin
+        self.params = params                      # MUST match the live belief's knobs
+        self.hysteresis = commit.CommitHysteresis()
+        self.model = None
+        self.origin: tuple[int, int, int] | None = None
+        self.human_cells: set[tuple[int, int, int]] = set()
+        self.reads = 0
+        self.last_decode_ms: float | None = None   # this read's decoder wall time
+        # The materials constraint (D5 §4, 2026-07-06): where the agent's inventory
+        # and substitution grants come from. Default: the newest agent status file
+        # next to the trace. A None snapshot (replays, counterfactual, agent gone)
+        # leaves the constraint INACTIVE and behavior bit-unchanged.
+        self.trace_path = trace_path
+        self.materials_source = materials_source or (lambda: materials.read_agent_snapshot(
+            os.path.dirname(os.path.abspath(trace_path))))
+        self.account = materials.MaterialsAccount()
+        self._materials_block: dict | None = None
+        # One runner, one trace file, from the top. Append mode here once let a
+        # re-attached run stack its rows under a previous run's (run_live now
+        # banks the older files aside, and a repeated replay starts over).
+        self.trace = open(trace_path, "w", encoding="utf-8")
+        if preload and decoder_model.available():
+            # Load torch + the decoder NOW, before the socket attaches. Lazy-loading
+            # on the first read stalls the single pipeline thread for seconds —
+            # longer than the mod's drop-oldest buffer holds — so a live session
+            # would open with a burst of dropped moments at its first correction.
+            self._ensure_model()
+
+    def _ensure_model(self) -> None:
+        if self.model is None:
+            import torch
+
+            self.model, _, _ = decoder_model.load()
+            self.model.to("cuda" if torch.cuda.is_available() else "cpu")
+
+    def ingest_events(self, block_events) -> None:
+        """Track the human-built standing cells (reversibility's world half)."""
+        for event in block_events:
+            if is_agent_actor(event.actor):
+                continue
+            cell = (event.pos.x, event.pos.y, event.pos.z)
+            if event.op is BlockOp.PLACE:
+                self.human_cells.add(cell)
+            else:
+                self.human_cells.discard(cell)
+
+    def _decide(self, belief, fused, status):
+        """(gate_read, proposal, flags, positions, raw_k, held_k) for one tick."""
+        self.last_decode_ms = None             # None until this read actually decodes
+        self._materials_block = None           # None until an inventory is observed
+        slot = context_builder.arm3_slot(belief)
+        if self.origin is None:
+            self.origin = context_builder.build_origin([fused])
+        proposal = reject = None
+        held_k, raw_k, positions, flags, target = 0, 0, [], [], None
+        prefix_reversible = None
+        if decoder_model.available() and self.origin is not None:
+            self._ensure_model()
+            ctx = context_builder.control_context(fused, self.reads, "arm3", slot,
+                                                  self.origin)
+            decode_started = time.perf_counter()
+            proposal, reject = decoder_model.propose(self.model, ctx, _MAX_ACTIONS)
+            self.last_decode_ms = (time.perf_counter() - decode_started) * 1000.0
+            if proposal is not None:
+                origin = self.origin
+                human_rel = frozenset((c[0] - origin[0], c[1] - origin[1],
+                                       c[2] - origin[2]) for c in self.human_cells)
+                flags = reversibility.prefix_flags(proposal.actions, human_rel)
+                raw_k, positions = commit.k_commit(
+                    proposal, flags, "arm3", belief, slot["p_top"], self.params,
+                    self.delta_hat, self.staircase)
+                # The materials constraint (D5 §4): the prefix may not extend past
+                # the first placement the agent has no stock for — a shortage
+                # SHRINKS the build; substitution needs an explicit chat grant.
+                snapshot = self.materials_source()
+                if snapshot is not None:
+                    inventory, grants = snapshot
+                    mat_flags, missing, substituted = materials.feasibility_flags(
+                        proposal.actions, inventory, grants)
+                    feasible_prefix = (mat_flags.index(True) if any(mat_flags)
+                                       else len(proposal.actions))
+                    capped = feasible_prefix < raw_k
+                    if capped:
+                        raw_k = feasible_prefix
+                    self.account.observe(proposal.actions, missing, substituted,
+                                         capped, inventory, grants)
+                    ask = None
+                    if missing:
+                        short_block = sorted(missing)[0]
+                        candidate = materials.propose_substitute(short_block,
+                                                                 inventory, grants)
+                        if candidate is not None:
+                            ask = {"block": short_block, "short": missing[short_block],
+                                   "substitute": candidate}
+                    self._materials_block = {"feasible_prefix": feasible_prefix,
+                                             "missing": missing, "ask": ask}
+                held_k = self.hysteresis.read(raw_k)
+                if held_k >= 1:
+                    prefix_reversible = not any(flags[:held_k])
+                first = proposal.actions[0]
+                if not isinstance(first, Say):
+                    target = (first.dx + origin[0], first.dy + origin[1],
+                              first.dz + origin[2])
+        behavior = status.get("current_behavior")
+        gate_read = fsm.GateRead(
+            top_goal=slot["top_goal"], p_top=slot["p_top"],
+            entropy_nats=slot["entropy_nats"], p_z1=slot["p_z1"],
+            idle=behavior in (None, "idle"),
+            player_pos=tuple(status["player_pos"]) if status.get("player_pos") else None,
+            focus_block=tuple(status["focus_block"]) if status.get("focus_block") else None,
+            target_cell=target, k_commit=held_k,
+            prefix_fully_reversible=prefix_reversible,
+            nothing_to_do=reject == decoder_model.NOTHING_TO_DO)
+        return gate_read, proposal, positions, raw_k, held_k, target
+
+    def _materialized(self, belief, status: dict):
+        """The belief as of THIS read, not as of the last correction. The live belief
+        only advances when the player acts; a read seconds later must not reuse that
+        confidence as if no time had passed. So advance a COPY over the elapsed ticks
+        (predict is pure; nothing feeds back) — the same rule the belief log's drift
+        lines use. Replay drivers pass no live tick, so they are untouched."""
+        tick_now = status.get("tick")
+        snapshot = status.get("belief_snapshot_id")
+        if tick_now is None or snapshot is None or tick_now <= snapshot:
+            return belief
+        return predict(belief, (tick_now - snapshot) / 20.0, self.params)
+
+    def _degraded(self, reason: str, status: dict) -> dict:
+        """A read that could not gate still leaves its trace row (one row per read,
+        D5 §7) — the log must show the gate was alive and observing, not absent."""
+        row = {"tick": status.get("tick"), "k": self.reads,
+               "belief_snapshot_id": status.get("belief_snapshot_id"),
+               "K_commit": 0, "idle_state": None,
+               "chosen_state": "observe", "candidate_state": "observe",
+               "reason": reason, "committed_actions": []}
+        self.trace.write(json.dumps(row) + "\n")
+        self.trace.flush()
+        return {"state": "observe", "reason": reason, "k_commit": 0}
+
+    def read(self, belief, fused, status: dict) -> dict:
+        """One gate read. Returns the status-file "gate" block; flushes a trace row."""
+        self.reads += 1
+        if fused is None:
+            return self._degraded("no corrections yet", status)
+        if not decoder_model.available():
+            return self._degraded("no decoder on disk", status)
+        gate_read, proposal, positions, raw_k, held_k, target = self._decide(
+            self._materialized(belief, status), fused, status)
+        decision, candidate = self.fsm.read(gate_read)
+        summary = None
+        if proposal is not None and held_k >= 1:
+            summary = (f"{held_k} action(s) toward {gate_read.top_goal}, "
+                       f"first at {target}")
+        row = {"tick": fused.tick, "k": self.reads,
+               "belief_snapshot_id": status.get("belief_snapshot_id"),
+               "inputs_snapshot": {
+                   "top_goal": decision.inputs_snapshot.top_goal,
+                   "p_top_goal": round(decision.inputs_snapshot.p_top_goal, 4),
+                   "belief_entropy": round(decision.inputs_snapshot.belief_entropy, 4),
+                   "p_z1": round(decision.inputs_snapshot.p_z1, 4),
+                   "proximity": (None if decision.inputs_snapshot.proximity is None
+                                 else round(decision.inputs_snapshot.proximity, 2)),
+                   "reversibility": decision.inputs_snapshot.reversibility},
+               "K_commit": held_k, "raw_k_commit": raw_k, "per_position": positions,
+               "idle_state": "idle" if gate_read.idle else "active",
+               "chosen_state": decision.state.value,
+               "candidate_state": candidate.value, "reason": decision.reason,
+               "decode_ms": (round(self.last_decode_ms, 1)
+                             if self.last_decode_ms is not None else None),
+               "feasible_prefix": (self._materials_block or {}).get("feasible_prefix"),
+               "missing": (self._materials_block or {}).get("missing"),
+               "committed_actions": []}      # demo config: nothing ever executes
+        self.trace.write(json.dumps(row) + "\n")
+        self.trace.flush()
+        return {"state": decision.state.value, "reason": decision.reason,
+                "k_commit": held_k,
+                "conf": round(gate_read.p_top * (1 - gate_read.p_z1), 4),
+                "p_star": round(gate_read.p_top, 4),
+                "target_cell": list(target) if target else None,
+                "proposal_summary": summary,
+                "materials": self._materials_block}
+
+    def close(self) -> None:
+        self.trace.close()
+        if self.account.last_inventory is not None:
+            # The constraint was live at least once: leave the session's material
+            # ledger — usage, remaining, missing, compromises (D5 §4 report).
+            if ".gate_trace" in self.trace_path:
+                base = self.trace_path[: self.trace_path.index(".gate_trace")]
+            else:
+                base = os.path.splitext(self.trace_path)[0]
+            report_path = base + ".materials_report.json"
+            with open(report_path, "w", encoding="utf-8") as handle:
+                json.dump(self.account.report(committed_places=0), handle, indent=2)
+            print(f"  materials report -> {os.path.basename(report_path)}")
+
+
+def replay_gate(jsonl_path: str) -> int:
+    """The pre-demo proof: run the LIVE runner over a recorded session's banked
+    evidence, one read per correction, and show the state mix. Writes
+    <session>.gate_trace.replay.jsonl — never the live trace's name."""
+    from ..capture.jsonl_ingest import JsonlSource
+    from ..contracts.b3 import fuse_dicts
+    from ..data import decoder_corpus
+    from ..intent import heads_v1
+
+    base = jsonl_path[:-6]                     # strip .jsonl
+    b1 = [json.loads(l) for l in open(base + ".evidence2d.jsonl", encoding="utf-8")
+          if l.strip()]
+    b2 = [json.loads(l) for l in open(base + ".evidence3d.jsonl", encoding="utf-8")
+          if l.strip()]
+    fused = [fuse_dicts(a, b) for a, b in
+             zip([r for r in b1 if r.get("scored")], b2)]
+    beliefs = decoder_corpus.replay_beliefs(fused)     # the calibrated v1 replay
+    packets = JsonlSource(jsonl_path, base + ".manifest.json").load().packets
+    positions = {p.tick: (p.server.player_pos.x, p.server.player_pos.y,
+                          p.server.player_pos.z)
+                 for p in packets if p.server.player_pos is not None}
+    events_by_tick: dict[int, list] = {}
+    for packet in packets:
+        if packet.server.block_events:
+            events_by_tick[packet.tick] = list(packet.server.block_events)
+
+    runner = LiveGateRunner(base + ".gate_trace.replay.jsonl",
+                            heads_v1.tracker_params(), demo=True)
+    fed_through = 0
+    states: dict[str, int] = {}
+    last_pos = None
+    ticks_sorted = sorted(events_by_tick)
+    for record, belief in zip(fused, beliefs):
+        while fed_through < len(ticks_sorted) and ticks_sorted[fed_through] <= record.tick:
+            runner.ingest_events(events_by_tick[ticks_sorted[fed_through]])
+            fed_through += 1
+        for at in sorted(positions):
+            if at <= record.tick:
+                last_pos = positions[at]
+        status = {"current_behavior": "idle" if record.idle else record.a_hat.value,
+                  "player_pos": last_pos,
+                  "focus_block": ((record.focus.block.x, record.focus.block.y,
+                                   record.focus.block.z) if record.focus.block else None),
+                  "belief_snapshot_id": record.tick}
+        block = runner.read(belief, record, status)
+        states[block["state"]] = states.get(block["state"], 0) + 1
+    runner.close()
+    total = sum(states.values())
+    print(f"gate replay over {total} reads (demo config, v1 belief):")
+    for state, count in sorted(states.items(), key=lambda kv: -kv[1]):
+        print(f"  {state:<15} {count:>5}  ({count / total:.0%})")
+    if states.get("place_low_risk"):
+        print("  !! PLACE_LOW_RISK appeared under the demo config — this is a bug")
+        return 1
+    print(f"  trace -> {os.path.basename(base)}.gate_trace.replay.jsonl")
+    return 0

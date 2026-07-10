@@ -31,6 +31,7 @@ import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import matplotlib                                                       # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt                                         # noqa: E402
@@ -145,11 +146,28 @@ def _channels_graph(b1_lines, b2_lines, out_dir, made) -> None:
     if h2d:
         top.plot([t for t, _ in h2d], [n for _, n in h2d], color="#4c8dd6",
                  linewidth=1.0, label="h2d |v| (VPT)")
-    h3d = [(line["tick"], _norm(line["h3d"])) for line in b2_lines if line.get("h3d")]
+    h3d = [(line["tick"], line["h3d"]) for line in b2_lines if line.get("h3d")]
     if h3d:
-        top.plot([t for t, _ in h3d], [n for _, n in h3d], color="#4fae6e",
-                 linewidth=1.0, label="h3d |v| (Uni3D)")
-    top.set_ylabel("embedding L2 norm")
+        # Uni3D embeddings are unit-normalized, so their L2 norm is 1.0 by
+        # construction — a norm plot reads "flat" no matter what the shape does.
+        # What actually moves is the DIRECTION: how far each embedding rotated
+        # since the previous correction (drift), and how close it already points
+        # to the finished build's shape (convergence).
+        def _cos(a, b):
+            return sum(x * y for x, y in zip(a, b))
+
+        twin3 = top.twinx()
+        if len(h3d) > 1:
+            twin3.plot([t for t, _ in h3d[1:]],
+                       [_cos(h3d[i][1], h3d[i - 1][1]) for i in range(1, len(h3d))],
+                       color="#4fae6e", linewidth=1.0, label="h3d drift cos(k, k−1)")
+        final = h3d[-1][1]
+        twin3.plot([t for t, _ in h3d], [_cos(v, final) for _, v in h3d],
+                   color="#2e7d4f", linewidth=1.0, linestyle="--",
+                   label="h3d convergence cos(k, final)")
+        twin3.set_ylabel("h3d direction cosine (unit-norm embedding)")
+        twin3.legend(loc="lower right", fontsize=8)
+    top.set_ylabel("h2d L2 norm")
     top.set_title("Model channels producing evidence")
     top.legend(loc="upper left", fontsize=8)
     sgoal = [(line["tick_range"][1], line["s_goal"]) for line in scored if line.get("s_goal")]
@@ -211,20 +229,51 @@ def _scan_graph(scan_report, out_dir, made) -> None:
 
 
 def _clouds_graph(built, scanned, out_dir, made) -> None:
+    """Both clouds in the ONE fixed display frame (pinned): x and y are the two
+    horizontal world axes, z is height above the DETECTED GROUND — the built
+    set's lowest layer, the same rule the D2 templates use. Lit voxel cubes with
+    edge lines instead of loose dots, identical orientation and extents on both
+    subplots so the exact and scanned clouds compare face to face. Geometry is
+    untouched: only observed cells are drawn, nothing interpolated."""
     if not built:
         return
+    import numpy as np
+
+    ground = min(c[1] for c in built)
+    xs_all = [c[0] for c in built]
+    zs_all = [c[2] for c in built]
+    x0, z0 = min(xs_all), min(zs_all)
+    nx = max(xs_all) - x0 + 1
+    nz = max(zs_all) - z0 + 1
+    ny = max(c[1] for c in built) - ground + 1
+
+    def _grid(cells):
+        # cells -> a dense occupancy grid in the display frame; bounds come from
+        # the BUILT set so both subplots share extents exactly.
+        grid = np.zeros((nx, nz, ny), dtype=bool)
+        colors = np.empty((nx, nz, ny), dtype=object)
+        for (cx, cy, cz) in cells:
+            ix, iy, iz = cx - x0, cz - z0, cy - ground
+            if 0 <= ix < nx and 0 <= iy < nz and 0 <= iz < ny:
+                grid[ix, iy, iz] = True
+                colors[ix, iy, iz] = plt.cm.viridis(iz / max(ny - 1, 1))
+        return grid, colors
+
     figure = plt.figure(figsize=(10, 5))
     for index, (title, cells) in enumerate(
             (("exact built cloud (D2)", built),
              ("scanned portion (agent's eyes)", scanned or {}))):
         axis = figure.add_subplot(1, 2, index + 1, projection="3d")
         if cells:
-            xs = [c[0] for c in cells]
-            ys = [c[2] for c in cells]   # plot ground plane as x/z, height as z-axis
-            zs = [c[1] for c in cells]
-            axis.scatter(xs, ys, zs, c=zs, cmap="viridis", s=12)
+            grid, colors = _grid(cells)
+            axis.voxels(grid, facecolors=colors, edgecolor=(0, 0, 0, 0.3),
+                        linewidth=0.3, shade=True)
         axis.set_title(f"{title} — {len(cells)} cells", fontsize=9)
-        axis.set_axis_off()
+        axis.set_xlabel("x", fontsize=8)
+        axis.set_ylabel("y", fontsize=8)
+        axis.set_zlabel("z (height above ground)", fontsize=7)
+        axis.tick_params(labelsize=6)
+        axis.view_init(elev=28, azim=-60)   # one orientation, both subplots
     _save(figure, out_dir, "clouds.png", made)
 
 
@@ -235,11 +284,28 @@ def main() -> int:
         print(__doc__)
         return 1
     jsonl = positional[0]
+    if not os.path.exists(jsonl) and not jsonl.endswith(".jsonl"):
+        # A bare session id: let the one layout-aware resolver find it (dated
+        # dir, or the legacy flat root — session_store owns that knowledge).
+        from mica.capture.session_store import session_dir
+        sid_arg = jsonl
+        jsonl = os.path.join(session_dir(sid_arg), f"{sid_arg}.jsonl")
     base = jsonl[: -len(".jsonl")]
     session = JsonlSource(jsonl, base + ".manifest.json").load()
     sid = session.manifest.session_id
-    out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(jsonl))),
-                           "reports", sid)
+    # Reports live in `reports/` NEXT TO the raw tree the session sits under —
+    # found by walking up to the nearest `raw` ancestor, so the flat root, the
+    # dated `raw/<date>/<sid>/` layout, and test fixtures all resolve the same
+    # way (a fixed two-dirs-up climb landed inside the date folder). A session
+    # outside any raw tree banks into the repo's capture/reports.
+    ancestor = os.path.dirname(os.path.abspath(jsonl))
+    reports_root = os.path.join(_ROOT, "capture", "reports")
+    while os.path.dirname(ancestor) != ancestor:
+        if os.path.basename(ancestor) == "raw":
+            reports_root = os.path.join(os.path.dirname(ancestor), "reports")
+            break
+        ancestor = os.path.dirname(ancestor)
+    out_dir = os.path.join(reports_root, sid)
     os.makedirs(out_dir, exist_ok=True)
 
     b1_lines = _read_jsonl(base + ".evidence2d.jsonl")
@@ -256,9 +322,27 @@ def main() -> int:
         scan_arg = sys.argv[sys.argv.index("--scan") + 1]
     else:
         import glob as _glob
-        candidates = sorted(_glob.glob(os.path.join(os.path.dirname(os.path.abspath(jsonl)),
-                                                    "agent-*.scan*.jsonl")), key=os.path.getmtime)
-        scan_arg = candidates[-1] if candidates else None
+        # Agent scan files are root aggregates (the agent writes next to where the
+        # MOD records, the flat raw root) — a relocated session's dir holds none,
+        # so search both places. Pair by WALLCLOCK, not by newest: the freshest
+        # file can already belong to the NEXT session's world (a report once drew
+        # "0 scanned cells" for exactly that reason). Of the scans that started
+        # after this session began, the earliest is this session's own agent.
+        here = os.path.dirname(os.path.abspath(jsonl))
+        root = os.path.join(_ROOT, "capture", "raw")
+        candidates = sorted(_glob.glob(os.path.join(here, "agent-*.scan*.jsonl")),
+                            key=os.path.getmtime)
+        if os.path.abspath(here) != os.path.abspath(root):
+            # scans next to the session always win; the repo root is the fallback
+            candidates += sorted(_glob.glob(os.path.join(root, "agent-*.scan*.jsonl")),
+                                 key=os.path.getmtime)
+        start_s = session.manifest.session_start_ms / 1000.0
+        scan_arg = None
+        for candidate in candidates:
+            sweeps = load_scan(candidate)
+            if sweeps and sweeps[0].ts >= start_s:
+                scan_arg = candidate
+                break
     if scan_arg and os.path.exists(scan_arg):
         scanned = scanned_build_cells(accumulate(load_scan(scan_arg)), built)
         shutil.copy2(scan_arg, os.path.join(out_dir, "agent_scan.jsonl"))

@@ -170,22 +170,65 @@ function start(port) {
   // every launch (the tailer treats the shrink as a rewrite and starts over).
   const statusPath = path.join(RAW_DIR, `agent-${NAME}.status.jsonl`);
   // The scan file: one line per 4 Hz sweep that saw something new. A previous
-  // launch's scan is rotated aside with a timestamp — never deleted — so a
-  // finished session's scan survives for the post-session report.
+  // launch's scan is rotated aside — never deleted — so a finished session's scan
+  // survives for the post-session report. The rotated name carries the SESSION ID
+  // when the sweeps are tagged with one (they are, once the mind's live_status
+  // names the session), so the file says which session it belongs to instead of
+  // leaving the report to guess by clock. Untagged files keep the mtime name.
   const scanPath = path.join(RAW_DIR, `agent-${NAME}.scan.jsonl`);
+  function lastTaggedSession(file) {
+    // The newest sweep line that names its session. Scan files stay small (a few
+    // hundred KB), so one whole read at launch costs nothing.
+    try {
+      const lines = fs.readFileSync(file, 'utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i]) continue;
+        try {
+          const row = JSON.parse(lines[i]);
+          if (row.session) return row.session;
+        } catch (err) { /* torn line: keep looking */ }
+      }
+    } catch (err) { /* unreadable: fall back to the mtime name */ }
+    return null;
+  }
   try {
     const prev = fs.statSync(scanPath);
     if (prev.size > 0) {
-      fs.renameSync(scanPath, scanPath.replace(/\.jsonl$/, `.${Math.floor(prev.mtimeMs)}.jsonl`));
+      const prevSession = lastTaggedSession(scanPath);
+      let rotated = scanPath.replace(/\.jsonl$/, `.${prevSession || Math.floor(prev.mtimeMs)}.jsonl`);
+      if (fs.existsSync(rotated)) {
+        // Same session, second agent launch: keep both files apart.
+        rotated = scanPath.replace(/\.jsonl$/, `.${prevSession}.${Math.floor(prev.mtimeMs)}.jsonl`);
+      }
+      fs.renameSync(scanPath, rotated);
     }
   } catch (err) { /* no previous scan */ }
   const scanSeen = new Set();     // "x,y,z" of every cell recorded this session
+  let scanSessionId = null;       // the capture session the mind says is open —
+                                  // sticky: kept after the pipeline goes quiet, so
+                                  // late sweeps still say which session they saw
   let agentState = 'connecting';
   let lastAction = null;
   let followMode = 'holding';
   let liveStatus = null;          // the mind's newest fresh snapshot (or null)
   let viewerPort = null;          // the port the agent camera ACTUALLY bound (null = down)
   let viewerError = null;         // why the camera is down, readable from the dashboard
+  // --- the materials constraint (D5 §4, 2026-07-06): what the agent HOLDS is what
+  // it may place. The inventory and any chat-granted substitutions travel to the
+  // mind in the status line below; the gate caps its committed prefix on them.
+  const materialGrants = {};           // block -> substitute the human said "yes" to
+  const deniedSubstitutes = new Set(); // "block:substitute" refused — never re-asked
+  let pendingAsk = null;               // {block, substitute, atMs} awaiting yes/no
+  let lastMaterialAskMs = 0;
+  function inventorySnapshot() {
+    const counts = {};
+    try {
+      for (const item of bot.inventory.items()) {
+        counts[item.name] = (counts[item.name] || 0) + item.count;
+      }
+    } catch (err) { /* inventory not readable yet (pre-spawn) */ }
+    return counts;
+  }
   function writeStatus() {
     const e = bot.entity;
     const human = nearestHuman();
@@ -204,6 +247,8 @@ function start(port) {
       viewer_error: viewerError,
       scan_cells: scanSeen.size,
       last_action: lastAction,
+      inventory: inventorySnapshot(),
+      material_grants: materialGrants,
     }) + '\n';
     try { fs.appendFileSync(statusPath, line); } catch (err) { /* disk hiccup: skip a beat */ }
   }
@@ -220,6 +265,64 @@ function start(port) {
 
   function setGoal(goal, dynamic) {
     try { bot.pathfinder.setGoal(goal, dynamic || false); } catch (e) { /* mid-respawn */ }
+  }
+
+  // --- coverage patrol (the scan channel's legs): when the human is idle or far,
+  // walk to a vantage on the build's UNSEEN side and sweep the gaze across it.
+  // The scan sensor itself is untouched — it records whatever the eyes pass over;
+  // patrol only decides where the body stands. Safety order is unchanged and
+  // above patrol: gate YIELD, the workspace rule, and the personal band all win,
+  // and the moment the human acts nearby the normal follow behavior returns.
+  const PATROL_MIN_UNSEEN = 0.10;    // engage only while >10% of the build is unseen
+  const PATROL_STANDOFF = 7;         // stand this far back from the unseen face
+  const PATROL_REPOSITION_MS = 8000; // one vantage move at most every 8 s
+  let lastPatrolMoveMs = 0;
+  let patrolLook = null;             // where the eyes sweep while patrolling
+
+  function unseenBuiltCells() {
+    if (!liveStatus || !liveStatus.built_cells || !liveStatus.built_cells.length) return null;
+    const unseen = liveStatus.built_cells.filter(c => !scanSeen.has(`${c[0]},${c[1]},${c[2]}`));
+    return { unseen, total: liveStatus.built_cells.length };
+  }
+
+  function centroidOf(cells) {
+    let x = 0, y = 0, z = 0;
+    for (const c of cells) { x += c[0]; y += c[1]; z += c[2]; }
+    return new Vec3(x / cells.length + 0.5, y / cells.length + 0.5, z / cells.length + 0.5);
+  }
+
+  function patrolTick(me, them, focus, now) {
+    const gap = unseenBuiltCells();
+    if (!gap || gap.unseen.length / gap.total < PATROL_MIN_UNSEEN) {
+      if (followMode === 'patrolling') { setGoal(null); followMode = 'holding'; patrolLook = null; }
+      return false;                   // coverage is good: nothing to patrol for
+    }
+    const unseenC = centroidOf(gap.unseen);
+    const buildC = centroidOf(liveStatus.built_cells);
+    // Stand OUTSIDE the unseen face, looking back at it: out along the direction
+    // from the build's center through the unseen cluster. An interior gap (the
+    // two centroids coincide) is viewed from wherever the agent already is.
+    let out = unseenC.minus(buildC); out.y = 0;
+    if (out.norm() < 0.5) { out = me.minus(unseenC); out.y = 0; }
+    if (out.norm() < 0.5) out = new Vec3(1, 0, 0);
+    out = out.normalize();
+    const vantage = unseenC.plus(out.scaled(PATROL_STANDOFF));
+    // The same vetoes as everything else: never into the workspace, never into
+    // the human's personal space — if the vantage would violate them, no patrol.
+    if (focus && vantage.distanceTo(focus) < WORKSPACE_R + 1) return false;
+    if (them && vantage.distanceTo(them) < FOLLOW_NEAR + 1) return false;
+    if (now - lastPatrolMoveMs >= PATROL_REPOSITION_MS) {
+      setGoal(new goals.GoalNear(vantage.x, vantage.y, vantage.z, 2));
+      lastPatrolMoveMs = now;
+      lastAction = `patrol: ${gap.unseen.length} unseen cells`;
+    }
+    // Sweep the gaze across the unseen cluster (a slow pendulum around its center)
+    // so the ray grid passes over every face; scanTick records what it meets.
+    const swing = Math.sin(now / 1500);
+    const perp = new Vec3(-out.z, 0, out.x).scaled(swing * 4);
+    patrolLook = unseenC.plus(perp);
+    followMode = 'patrolling';
+    return true;
   }
 
   let lastBackoffMs = 0;
@@ -247,14 +350,27 @@ function start(port) {
       followMode = 'yielding workspace';
       return;
     }
-    if (d > FOLLOW_FAR) {
+    // The D5 gate's YIELD widens the personal band for a few seconds: the agent
+    // steps further out the moment the gate says the human is too close to its
+    // would-be target. Same retreat leg, bigger radius, nothing new to test.
+    const nearBand = Date.now() < yieldUntilMs ? FOLLOW_NEAR + 4 : FOLLOW_NEAR;
+    // Coverage patrol slots in BELOW the vetoes above and ABOVE plain following:
+    // it may claim the tick only while the human is idle or far, and never during
+    // a gate YIELD. The instant the human acts nearby, the branches below resume.
+    const humanIdle = liveStatus && liveStatus.current_behavior === 'idle';
+    if ((humanIdle || d > FOLLOW_FAR) && now >= yieldUntilMs
+        && d >= nearBand && patrolTick(me, them, focus, now)) {
+      return;
+    }
+    if (followMode === 'patrolling') { patrolLook = null; followMode = 'holding'; }
+    if (d > FOLLOW_FAR && Date.now() >= yieldUntilMs) {
       if (followMode !== 'following') {
         setGoal(new goals.GoalFollow(human.entity, FOLLOW_NEAR + 1), true);
         followMode = 'following';
       }
-    } else if (d < FOLLOW_NEAR) {
+    } else if (d < nearBand) {
       if (now - lastBackoffMs > 750) {
-        const away = me.minus(them).normalize().scaled(FOLLOW_NEAR + 1 - d);
+        const away = me.minus(them).normalize().scaled(nearBand + 1 - d);
         const spot = me.plus(away);
         setGoal(new goals.GoalNear(spot.x, spot.y, spot.z, 1));
         lastBackoffMs = now;
@@ -272,6 +388,12 @@ function start(port) {
   // crosshair rests, which is what "watching what the player does" means.
   function lookTick() {
     if (agentState !== 'present') return;
+    if (followMode === 'patrolling' && patrolLook) {
+      // On patrol the eyes belong to the scan: sweep the unseen cluster instead
+      // of mirroring the human (who is idle or far — that's why patrol engaged).
+      bot.lookAt(patrolLook).catch(() => {});
+      return;
+    }
     const human = nearestHuman();
     if (!human || !human.entity) return;
     const e = human.entity;
@@ -293,8 +415,84 @@ function start(port) {
   let lastAnnounced = null;
   let lastAdvisoryMs = 0;
   let lastEscapeWarnMs = 0;
+  // --- D5 gate rendering: when the pipeline publishes a `gate` block, the REAL ---
+  // gate drives what the agent says and does; the pre-B6 advisory line below stays
+  // only as the fallback for gate-less runs (exactly the handover the vault pinned).
+  let lastGateChatMs = 0;
+  let lastGateState = null;
+  let yieldUntilMs = 0;
+  function renderGate(gate) {
+    if (!gate || !gate.state) return false;
+    const now = Date.now();
+    if (gate.state === 'yield') {
+      // step back: reuse the proximity band's retreat leg by biasing the follow
+      // distance out; the band logic in presenceTick does the walking.
+      yieldUntilMs = now + 4000;
+      lastAction = 'gate: yield (backing off)';
+    } else if ((gate.state === 'suggest' || gate.state === 'preview')
+               && process.env.MICA_QUIET !== '1' && agentState === 'present'
+               && now - lastGateChatMs >= ADVISORY_GAP_MS
+               && (gate.state !== lastGateState || gate.proposal_summary)) {
+      lastGateChatMs = now;
+      if (gate.state === 'suggest') {
+        bot.chat(`Shall I help? I could add ${gate.proposal_summary || 'the next piece'}`
+          + ` (conf ${Math.round((gate.conf || 0) * 100)}%)`);
+      } else {
+        bot.chat(`Previewing: ${gate.proposal_summary || 'a placement'} — say no to wave me off`);
+        if (gate.target_cell) {
+          const [gx, gy, gz] = gate.target_cell;
+          bot.lookAt(new Vec3(gx + 0.5, gy + 0.5, gz + 0.5)).catch(() => {});
+        }
+      }
+      lastAction = `gate: ${gate.state}`;
+    }
+    // The materials ask (D5 §4): substitution is never silent — when the gate says
+    // it is short a block and sees a same-family stand-in in the inventory, ask
+    // ONCE and wait for a chat yes/no. A refusal is remembered; silence times out.
+    if (pendingAsk && now - pendingAsk.atMs > 60000) pendingAsk = null;
+    const ask = gate.materials && gate.materials.ask;
+    if (ask && agentState === 'present' && process.env.MICA_QUIET !== '1'
+        && !pendingAsk && !materialGrants[ask.block]
+        && !deniedSubstitutes.has(`${ask.block}:${ask.substitute}`)
+        && now - lastMaterialAskMs >= ADVISORY_GAP_MS) {
+      lastMaterialAskMs = now;
+      pendingAsk = { block: ask.block, substitute: ask.substitute, atMs: now };
+      bot.chat(`I'm short ${ask.short} ${ask.block} for what I'd add — okay to use `
+        + `${ask.substitute} instead? say yes or no`);
+      lastAction = `materials ask: ${ask.block} -> ${ask.substitute}`;
+    }
+    lastGateState = gate.state;
+    return true;
+  }
+
+  // The human's answer to a pending materials ask. Only an explicit "yes" grants
+  // the one block->substitute equivalence (session-scoped); "no" is remembered so
+  // the same question is never asked twice. The grant reaches the mind through
+  // the status file's material_grants field.
+  bot.on('chat', (username, message) => {
+    if (username === NAME || !pendingAsk) return;
+    const text = String(message).trim().toLowerCase();
+    if (/^(yes|yeah|ok|okay|sure)\b/.test(text)) {
+      materialGrants[pendingAsk.block] = pendingAsk.substitute;
+      bot.chat(`Noted — ${pendingAsk.substitute} stands in for ${pendingAsk.block} this session.`);
+      lastAction = `materials grant: ${pendingAsk.block} -> ${pendingAsk.substitute}`;
+      pendingAsk = null;
+      writeStatus();
+    } else if (/^(no|nope|nah|don't|dont)\b/.test(text)) {
+      deniedSubstitutes.add(`${pendingAsk.block}:${pendingAsk.substitute}`);
+      bot.chat('Understood — I\'ll plan without it.');
+      lastAction = `materials denied: ${pendingAsk.block}`;
+      pendingAsk = null;
+      writeStatus();
+    }
+  });
+
   function liveTick() {
     liveStatus = readLiveStatus();
+    if (liveStatus && liveStatus.session_id) scanSessionId = liveStatus.session_id;
+    if (liveStatus && renderGate(liveStatus.gate)) {
+      return;   // the gate spoke (or chose silence); the fallback advisory stays quiet
+    }
     if (!liveStatus || !liveStatus.top_goal || (liveStatus.p_top_goal || 0) < ADVISORY_P) {
       streak = 0;
       streakGoal = null;
@@ -359,6 +557,7 @@ function start(port) {
     const line = JSON.stringify({
       ts: Date.now(),
       tick: bot.time ? bot.time.age : null,
+      session: scanSessionId,    // which capture session these cells were seen in
       pose: [e.position.x, e.position.y, e.position.z, e.yaw, e.pitch],
       cells: found,
     }) + '\n';
@@ -495,6 +694,12 @@ function start(port) {
     agentState = 'disconnected';
     writeStatus();
     for (const timer of timers) clearInterval(timer);
+    // The materials one-liner (chat is gone once disconnected, so it goes to the
+    // rig console); the full ledger is the mind's <session>.materials_report.json.
+    const grants = Object.keys(materialGrants).length
+      ? JSON.stringify(materialGrants) : 'none';
+    console.log(`[${NAME}] materials: substitution grants ${grants} — `
+      + 'full report written next to the session logs');
     console.log(`[${NAME}] disconnected`);
     // Exit outright: a leftover timer would keep this process alive, and the
     // lan_autostart watcher only re-arms once BOTH rig halves have exited.

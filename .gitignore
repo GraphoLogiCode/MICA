@@ -53,3 +53,6 @@ researchpapers/
 .idea/
 # Source C mined clips (YouTube-derived frames/transcripts) - regenerable by the mining script
 capture/youtube/
+
+# The labeling dashboard's own runtime state (which sessions the user set aside).
+after_session_tool/skipped.json

@@ -267,8 +267,12 @@ def main() -> int:
         "sample_early_pairs": _sample_pairs(results + real),
     }
     out = os.path.join(_SCRIPTED, "source_b_report.json")
-    with open(out, "w", encoding="utf-8") as handle:
+    # Write-then-rename: every downstream reader (after_game's verdict lookup, the
+    # labeling dashboard, readiness) trusts this file — never leave it half-written.
+    tmp = out + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
+    os.replace(tmp, out)
 
     s = report["scripted"]
     print(f"Source B labeling report -> {os.path.relpath(out, _ROOT)}")

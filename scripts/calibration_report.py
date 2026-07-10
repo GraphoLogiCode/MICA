@@ -37,6 +37,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 from mica.contracts.b1 import GOALS, MacroAction             # noqa: E402
+from mica.capture import session_store                      # noqa: E402
 from mica.contracts.b3 import fuse_dicts                     # noqa: E402
 from mica.intent.heads_v0 import likelihood                  # noqa: E402
 from mica.intent.tracker import (                            # noqa: E402
@@ -49,15 +50,23 @@ _RAW = os.path.join(_ROOT, "capture", "raw")
 _BINS = 10
 
 
+def _evidence(directory: str, session_id: str, suffix: str) -> str:
+    """Resolve a session's evidence file. Scripted corpus sessions sit flat in
+    `capture/scripted`; real captures live in the dated `capture/raw/<date>/<id>/`
+    layout, so fall back to session_store when the flat path is absent."""
+    flat = os.path.join(directory, f"{session_id}{suffix}")
+    return flat if os.path.exists(flat) else session_store.session_file(session_id, suffix)
+
+
 def _correction_points(directory: str, session_id: str, truth: str,
                        params: TrackerParams) -> tuple[list[tuple[float, bool]], list[float]]:
     """(top-goal confidence, correct?) at every correction of one session, plus the
     12-F8 margins: at each PLACE correction (a choice point), the belief-averaged
     deliberative probability of the observed action minus the heuristic one."""
     b1 = [json.loads(line) for line in
-          open(os.path.join(directory, f"{session_id}.evidence2d.jsonl"), encoding="utf-8")]
+          open(_evidence(directory, session_id, ".evidence2d.jsonl"), encoding="utf-8")]
     b2 = [json.loads(line) for line in
-          open(os.path.join(directory, f"{session_id}.evidence3d.jsonl"), encoding="utf-8")]
+          open(_evidence(directory, session_id, ".evidence3d.jsonl"), encoding="utf-8")]
     scored = [record for record in b1 if record["scored"]]
     belief = uniform_belief()
     previous_tick = 0

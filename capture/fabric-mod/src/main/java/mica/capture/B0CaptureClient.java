@@ -127,10 +127,14 @@ public class B0CaptureClient implements ClientModInitializer {
     // sessions were voided by a stray first block pinning the box away from the
     // build; growth (never moving, never shrinking) admits new territory with its
     // base snapshotted BEFORE the player can build there. -Dmica.regionGrow=0 opts out.
-    private static final int GROW_MARGIN = 8;          // grow when the player is this close to a face
-    private static final int GROW_STEP = 16;           // how far past the player each face extends
-    private static final int GROW_COOLDOWN_TICKS = 40; // at most one growth per 2 s
-    private static final int GROW_QUIET_TICKS = 5;     // short quiet so the compare misses the trailing tick
+    // 0.0.7 retune: a builder BRIDGING outward used to outrun growth (margin 8 is
+    // barely past placement reach, and the quiet gate never opened mid-burst — a
+    // real session escaped 47 events). Growth now also fires straight off the
+    // EVENTS (see maybeGrowForEvents), and the position path reacts sooner.
+    private static final int GROW_MARGIN = 12;         // grow when the player/build is this close to a face
+    private static final int GROW_STEP = 16;           // how far past the trigger each face extends
+    private static final int GROW_COOLDOWN_TICKS = 20; // position-path growth at most once per second
+    private static final int GROW_QUIET_TICKS = 1;     // just off the event tick (the mind judges at tick parity)
     private static final int GROW_MAX_DIMENSION = 145; // past this, escapes resume being the signal
 
     // The mixin (server thread) needs a path to the running mod instance.
@@ -307,7 +311,7 @@ public class B0CaptureClient implements ClientModInitializer {
         } catch (IOException e) {
             LOGGER.error("[MICA] write failed", e);
         }
-        maybeSnapshot(client, player, t, drained.size());
+        maybeSnapshot(client, player, t, drained);
     }
 
     // ---- region snapshots (D2 ground truth) ----------------------------------------
@@ -321,7 +325,8 @@ public class B0CaptureClient implements ClientModInitializer {
     // once per QUIESCENT_TICKS), and each re-anchor rewrites the base snapshot — which
     // stays strictly pre-action by construction, because no event exists yet. The
     // first recorded block change freezes the region where the builder actually is.
-    private void maybeSnapshot(Minecraft client, LocalPlayer player, int tick, int eventsThisTick) {
+    private void maybeSnapshot(Minecraft client, LocalPlayer player, int tick, JsonArray eventsThisTickArr) {
+        final int eventsThisTick = eventsThisTickArr.size();
         if (state.snapshotRegion == null) {
             initSnapshotRegion(player);
             writeSnapshot(client, tick);
@@ -351,6 +356,7 @@ public class B0CaptureClient implements ClientModInitializer {
             }
             return;   // no burst snapshots while provisional — nothing was built yet
         }
+        maybeGrowForEvents(client, eventsThisTickArr, tick);
         maybeGrowRegion(client, player, tick, eventsThisTick);
         if (eventsThisTick > 0) {
             state.quietTicks = 0;
@@ -378,26 +384,56 @@ public class B0CaptureClient implements ClientModInitializer {
         if (eventsThisTick > 0 || state.quietTicks < GROW_QUIET_TICKS) return;
         if (tick - state.lastGrowTick < GROW_COOLDOWN_TICKS) return;
         int[] r = state.snapshotRegion;
-        int px = (int) Math.floor(player.getX());
-        int py = (int) Math.floor(player.getY());
-        int pz = (int) Math.floor(player.getZ());
+        int[] g = grownToward(r, (int) Math.floor(player.getX()),
+                (int) Math.floor(player.getY()), (int) Math.floor(player.getZ()));
+        if (java.util.Arrays.equals(g, r)) return;
+        applyGrowth(client, r, g, tick, "player near a face");
+    }
+
+    // Event-path growth (0.0.7): a recorded block change near or past a face grows
+    // the box IMMEDIATELY — no quiet wait, no cooldown. A builder bridging outward
+    // used to outrun the quiet-gated position path (a real session escaped 47
+    // events); the box must never lag the build itself. Same-tick snapshots are
+    // safe for the human's own changes (client-predicted, so the world copy holds
+    // them at write time) and the mind side judges snapshots at tick parity; a
+    // block that already landed outside stays an escape — honest — but every
+    // placement after the growth is admitted.
+    private void maybeGrowForEvents(Minecraft client, JsonArray events, int tick) {
+        if (!"1".equals(System.getProperty("mica.regionGrow", "1"))) return;
+        if (events.size() == 0) return;
+        int[] r = state.snapshotRegion;
+        int[] g = r;
+        for (int i = 0; i < events.size(); i++) {
+            JsonArray p = events.get(i).getAsJsonObject().getAsJsonArray("pos");
+            g = grownToward(g, p.get(0).getAsInt(), p.get(1).getAsInt(), p.get(2).getAsInt());
+        }
+        if (java.util.Arrays.equals(g, r)) return;
+        applyGrowth(client, r, g, tick, "build reached a face");
+    }
+
+    // The growth rule for one point: every face the point comes within GROW_MARGIN
+    // of (or lies beyond) extends GROW_STEP past it. Grow-only by construction.
+    private static int[] grownToward(int[] r, int x, int y, int z) {
         int[] g = java.util.Arrays.copyOf(r, 6);
-        if (px - r[0] < GROW_MARGIN) g[0] = Math.min(g[0], px - GROW_STEP);
-        if (r[3] - px < GROW_MARGIN) g[3] = Math.max(g[3], px + GROW_STEP);
-        if (pz - r[2] < GROW_MARGIN) g[2] = Math.min(g[2], pz - GROW_STEP);
-        if (r[5] - pz < GROW_MARGIN) g[5] = Math.max(g[5], pz + GROW_STEP);
-        if (py - r[1] < GROW_MARGIN) g[1] = Math.max(0, Math.min(g[1], py - GROW_STEP));
-        if (r[4] - py < GROW_MARGIN) g[4] = Math.min(255, Math.max(g[4], py + GROW_STEP));
+        if (x - r[0] < GROW_MARGIN) g[0] = Math.min(g[0], x - GROW_STEP);
+        if (r[3] - x < GROW_MARGIN) g[3] = Math.max(g[3], x + GROW_STEP);
+        if (z - r[2] < GROW_MARGIN) g[2] = Math.min(g[2], z - GROW_STEP);
+        if (r[5] - z < GROW_MARGIN) g[5] = Math.max(g[5], z + GROW_STEP);
+        if (y - r[1] < GROW_MARGIN) g[1] = Math.max(0, Math.min(g[1], y - GROW_STEP));
+        if (r[4] - y < GROW_MARGIN) g[4] = Math.min(255, Math.max(g[4], y + GROW_STEP));
         // per-axis cap: a capped axis keeps its old faces and escapes stay honest there
         if (g[3] - g[0] + 1 > GROW_MAX_DIMENSION) { g[0] = r[0]; g[3] = r[3]; }
         if (g[5] - g[2] + 1 > GROW_MAX_DIMENSION) { g[2] = r[2]; g[5] = r[5]; }
         if (g[4] - g[1] + 1 > GROW_MAX_DIMENSION) { g[1] = r[1]; g[4] = r[4]; }
-        if (java.util.Arrays.equals(g, r)) return;
+        return g;
+    }
+
+    private void applyGrowth(Minecraft client, int[] from, int[] g, int tick, String why) {
         state.snapshotRegion = g;
         state.lastGrowTick = tick;
         writeManifest(state, -1);          // the manifest always carries the CURRENT box
         writeSnapshot(client, tick);       // the adopted cells' base, captured pre-build
-        LOGGER.info("[MICA] region grew: " + java.util.Arrays.toString(r)
+        LOGGER.info("[MICA] region grew (" + why + "): " + java.util.Arrays.toString(from)
                 + " -> " + java.util.Arrays.toString(g));
     }
 
@@ -700,7 +736,7 @@ public class B0CaptureClient implements ClientModInitializer {
         m.addProperty("session_id", st.sessionId);
         m.addProperty("session_start_ms", st.sessionStartMs);
         m.addProperty("mc_version", "1.16.5");
-        m.addProperty("mod_version", "fabric-b0-0.0.6");   // 0.0.6: grow-only region (v3) — the box follows the builder
+        m.addProperty("mod_version", "fabric-b0-0.0.7");   // 0.0.7: growth also fires off the EVENTS — the box never lags the build
         m.addProperty("event_schema_version", "1");   // B0 block-event schema version (jsonl_ingest reads this)
         // The frame settings this recording ran with — two captures with different
         // settings must be tellable apart from their manifests alone.

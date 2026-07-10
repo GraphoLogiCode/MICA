@@ -139,7 +139,9 @@ def arm_p_star(slot_kind: str, belief: Belief | None, slot_p_top: float,
         propagated = predict(belief, position * delta_hat, params)
         return max(category_marginal(propagated).values())
     if slot_kind == "arm0_zero":
-        return 1.0 / len(GOALS)       # no mechanism: the uniform floor, every horizon
+        # no mechanism: the calibrated neutral when one is frozen (D4 gate block:
+        # "reproduces the legacy two-threshold gate's mean"), else the uniform floor
+        return _arm0_neutral if _arm0_neutral is not None else 1.0 / len(GOALS)
     return slot_p_top                 # arm1 / arm2: a constant — nothing to propagate
 
 
@@ -182,6 +184,36 @@ class CommitHysteresis:
         allowed = min(raw_k_commit, self.last + 1)
         self.last = allowed
         return allowed
+
+
+_arm0_neutral: float | None = None
+
+
+def set_arm0_neutral(value: float | None) -> None:
+    """Install the frozen Arm-0 neutral (loaded from models/gate_v1.json)."""
+    global _arm0_neutral
+    _arm0_neutral = value
+
+
+def legacy_gate_mean(p_stars: list[float], p_z1s: list[float], theta_1: float,
+                     tau_skip: float = 0.5) -> float:
+    """Note 05's superseded two-scalar gate, measured: the fraction of validation
+    reads it would have committed on (p* above tau_g := theta(1) AND heuristic mass
+    below tau_skip). This is the 'legacy mean' D4's Arm-0 mapping references."""
+    if not p_stars:
+        return 0.0
+    return statistics.mean(
+        1.0 if (p > theta_1 and z < tau_skip) else 0.0
+        for p, z in zip(p_stars, p_z1s))
+
+
+def derive_arm0_neutral(mean_commit: float, theta_1: float) -> float:
+    """A fixed constant either always clears theta(1) or never does — so the neutral
+    that best reproduces the legacy gate's MEAN commit behavior is chosen by which
+    side of one-half that mean falls on. The derivation ships in gate_v1.json."""
+    if mean_commit >= 0.5:
+        return round(theta_1 + 0.02, 3)      # commits wherever confidences allow
+    return round(1.0 / len(GOALS), 3)        # the uniform floor: never commits
 
 
 def thresholds_to_json(thresholds: GateThresholds) -> dict:

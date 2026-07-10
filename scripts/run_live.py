@@ -32,6 +32,7 @@ import glob
 import io
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -48,7 +49,7 @@ from mica.contracts.serialize import (                                # noqa: E4
 from mica.contracts.b1 import GOALS                                   # noqa: E402
 from mica.intent.heads_v0 import likelihood                           # noqa: E402
 from mica.intent.tracker import TrackerParams, correct, predict, uniform_belief  # noqa: E402
-from mica.live_pipeline import LivePipeline, PipelineConfig, RecordSinks  # noqa: E402
+from mica.live_pipeline import LivePipeline, PipelineConfig, RecordSinks, StallMeter  # noqa: E402
 from mica.perception.pixel_head import LivePixelHead, TorchEncoders, write_d1_provenance  # noqa: E402
 from mica.perception.evidence2d import evidence_stream                # noqa: E402
 from mica.perception.evidence3d import DELTA_COMP_WINDOW, Evidence3DStream, build_evidence3d  # noqa: E402
@@ -275,7 +276,7 @@ def _seed_structure(jsonl: str, h3d_fn=None):
     return d2, monitor, seed_tick
 
 
-def _catch_up_structure(d2, monitor, jsonl: str, session_id: str, cutoff_tick: int) -> None:
+def _catch_up_structure(d2, monitor, jsonl: str, session_id: str, cutoff_tick: int) -> list:
     """A mid-session attach: everything the mod recorded BEFORE the first moment the
     socket delivered is history the live loop will never see (a real session once
     showed 22 of 100 built cells for exactly this reason). Replay that history from
@@ -283,7 +284,11 @@ def _catch_up_structure(d2, monitor, jsonl: str, session_id: str, cutoff_tick: i
     (the A7 rule, inside seed_history), the shadow world takes every event, pausing
     at each pre-attach snapshot to run the replay-vs-snapshot check. Attaching at
     session start makes this a no-op: nothing on disk is older than the first live
-    moment, so live output stays identical to the offline wrappers."""
+    moment, so live output stays identical to the offline wrappers.
+
+    Returns the replayed (tick, event) history so the caller can feed every OTHER
+    world consumer too — the D5 gate tracks the human's standing cells and must not
+    start blind to pre-attach blocks (D6 review F2)."""
     history = [(tick, event) for tick, event in _disk_events(jsonl) if tick < cutoff_tick]
     later = []
     for path in _snapshot_paths(jsonl, session_id)[1:]:
@@ -291,7 +296,7 @@ def _catch_up_structure(d2, monitor, jsonl: str, session_id: str, cutoff_tick: i
         if snap_tick < cutoff_tick:
             later.append((snap_tick, cells, snap_region))
     if not history and not later:
-        return
+        return history
     # The feature world walks the same interleave as the monitor: widen the frame
     # before a snapshot's events, adopt its base after them (region v3) — so blocks
     # placed in grown territory before the attach read as built, not as escapes.
@@ -310,6 +315,7 @@ def _catch_up_structure(d2, monitor, jsonl: str, session_id: str, cutoff_tick: i
     print(f"  late attach: {applied} human / {len(history) - applied} agent events"
           f" caught up from disk (recorded before live tick {cutoff_tick})"
           + ("  ** QUARANTINED during catch-up **" if monitor.quarantined else ""))
+    return history
 
 
 def _status_line(pipeline: LivePipeline, reorderer: PacketReorderer,
@@ -347,13 +353,15 @@ _MAX_STATUS_CELLS = 512
 
 
 def _write_live_status(path: str, session_id: str, pipeline: LivePipeline,
-                       head: LivePixelHead | None, d2=None) -> None:
+                       head: LivePixelHead | None, d2=None, gate: dict | None = None) -> None:
     """The agent bridge: one small JSON snapshot, rewritten atomically ~1 Hz.
     The in-game agent (and anything else local) polls this instead of touching
     the single-consumer live socket. A stale timestamp means the pipeline is gone.
     Carries the player-built cells too — the live source of the Uni3D point cloud,
     which FlowViz renders as the agent's structure view."""
     status = {"ts": time.time(), "session_id": session_id, **pipeline.status()}
+    if gate is not None:
+        status["gate"] = gate                # the D5 gate block the agent renders
     if head is not None:
         status["pixels"] = head.status()
     if d2 is not None:
@@ -406,6 +414,40 @@ def _make_head(pixels_on: bool):
     return head
 
 
+# Everything one live run writes next to the session. A second attach to the same
+# session must start these files fresh — and must not destroy the first run's.
+_RUN_OUTPUT_SUFFIXES = (".evidence2d.jsonl", ".evidence3d.jsonl", ".fused.jsonl",
+                        ".belief.jsonl", ".gate_trace.jsonl", ".live_run.json",
+                        ".materials_report.json", ".d1_provenance.json",
+                        ".d2_provenance.json")
+
+
+def _bank_previous_run(base: str) -> None:
+    """Move a previous run's outputs aside before this run opens its own.
+
+    Without this, a re-attach to the same session mixed two runs in one set of
+    files — worse, inconsistently: the belief log was truncated (mode "w") while
+    the gate trace appended, so the first run's gate rows pointed at belief
+    snapshots that no longer existed and the trace could not explain its own
+    decisions (found by scripts/audit_gate_trace.py on two real sessions).
+    Now every earlier run keeps its complete, matching set of files under
+    previous_runs/run-NN/, and the new run starts clean."""
+    present = [base + suffix for suffix in _RUN_OUTPUT_SUFFIXES
+               if os.path.exists(base + suffix)]
+    if not present:
+        return
+    session_dir = os.path.dirname(os.path.abspath(base))
+    number = 1
+    while os.path.isdir(os.path.join(session_dir, "previous_runs", f"run-{number:02d}")):
+        number += 1
+    dest = os.path.join(session_dir, "previous_runs", f"run-{number:02d}")
+    os.makedirs(dest)
+    for path in present:
+        shutil.move(path, os.path.join(dest, os.path.basename(path)))
+    print(f"  banked a previous run's {len(present)} output file(s) -> "
+          f"previous_runs/run-{number:02d}/ (runs never share files)")
+
+
 def _live(host: str, port: int, session_arg: str | None = None) -> int:
     pixels_on = "--pixels" in sys.argv or os.environ.get("MICA_PIXELS") == "1"
     h3d_on = "--h3d" in sys.argv or os.environ.get("MICA_H3D") == "1"
@@ -430,6 +472,7 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
     with open(jsonl.replace(".jsonl", ".manifest.json"), encoding="utf-8") as handle:
         session_id = json.load(handle)["session_id"]
     print(f"live session: {session_id}")
+    _bank_previous_run(base)
     if wait_session:
         # The session file exists from game launch, but the region only exists once
         # the player is actually IN a world — hold the attach until then, or the
@@ -461,12 +504,46 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
         head = _make_head(pixels_on)
 
     reorderer = PacketReorderer()
+    # OPT-IN trained heads for the live belief (the demo config; v0 stays the
+    # default so the golden-equivalence proof is untouched). Same rebind pattern
+    # as run_tracker: swap the module-global likelihood the correct step resolves.
+    params = TrackerParams()
+    if _flag_value("--heads", None) == "v1":
+        from mica.intent import heads_v1
+        import mica.live_pipeline as _lp
+        _lp.likelihood = heads_v1.likelihood
+        params = heads_v1.tracker_params()
+        print("  belief heads: TRAINED v1 (opt-in) with their jointly-fitted knobs")
     pipeline = LivePipeline(PipelineConfig(
-        params=TrackerParams(),
+        params=params,
         sinks=RecordSinks(**{name: handles.get(name) for name in sink_paths}),
         d2=d2, monitor=monitor, pixel_head=head))
+    gate_runner, gate_block = None, None
+    if d2 is not None and "--no-gate" not in sys.argv:
+        from mica.gate.live_loop import LiveGateRunner, gate_ready
+        if gate_ready():
+            # preload: the decoder loads NOW (before the socket attaches), never on
+            # the pipeline thread mid-session — a lazy first-read load would stall
+            # past the mod's drop-oldest buffer and open the session with a gap burst.
+            gate_runner = LiveGateRunner(f"{base}.gate_trace.jsonl", params, demo=True,
+                                         preload=True)
+            print("  D5 gate: LIVE, decoder pre-warmed (demo config — observe/suggest/"
+                  "preview only; trace -> " + os.path.basename(base) + ".gate_trace.jsonl)")
+        else:
+            print("  D5 gate: OFF (no decoder/gate freeze on disk)")
     status_path = os.path.join(os.path.dirname(os.path.abspath(jsonl)), "live_status.json")
+    # The runner's own two heavy steps, measured like the pipeline measures its own
+    # (D6 review F8): together they say where a gapped session's time actually went.
+    gate_stall, snap_stall = StallMeter(), StallMeter()
     seen_snapshots = set(_snapshot_paths(jsonl, session_id))
+    # Snapshots discovered on disk but not yet judged. A file appearing does NOT
+    # mean the pipeline has consumed every moment up to its tick — when processing
+    # lags the feed by more than the mod's 40-quiet-tick window, comparing at file
+    # arrival reads a world missing in-flight events and false-quarantines (D6
+    # review F12; reproduced at 10x rehearsal pace). The safe rule: judge snapshot
+    # @T only after a moment with tick >= T has been processed — the monitor holds
+    # newer events by tick, so judging LATER is always exact.
+    pending_snaps: list[tuple[int, Region, dict]] = []
     ended = "eof"
     moments_seen = 0
     escapes_warned_at = 0.0
@@ -480,11 +557,19 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
                 # anything recorded before it is caught up from the disk copy.
                 caught_up = True
                 if d2 is not None:
-                    _catch_up_structure(d2, monitor, jsonl, session_id, packet.tick)
+                    history = _catch_up_structure(d2, monitor, jsonl, session_id,
+                                                  packet.tick)
+                    if gate_runner is not None:
+                        # The gate is the third world consumer of catch-up: its
+                        # reversibility read tracks the human's standing cells and
+                        # must know about pre-attach blocks too (D6 review F2).
+                        gate_runner.ingest_events([event for _, event in history])
             if head is not None and frame is not None and packet.client.pov_frame is not None:
                 head.observe(packet.tick, packet.client.pov_frame, frame)
             for problem in pipeline.on_moment(packet, frame):
                 print(f"  ! {problem}")
+            if gate_runner is not None:
+                gate_runner.ingest_events(packet.server.block_events)
             moments_seen += 1
             if moments_seen % _STATUS_EVERY_MOMENTS == 0:
                 if head is not None and head.load_error and not pixel_error_shown:
@@ -509,10 +594,17 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
                                 if d2 is not None:
                                     pipeline.reseed_structure(d2, monitor)
                                     seen_snapshots = set(_snapshot_paths(jsonl, session_id))
+                                    pending_snaps = []   # the fresh monitor starts over
                             else:
                                 print(f"  region grew — frame now {list(region_now)}")
                                 pipeline.notice_region(new_region)
-                _write_live_status(status_path, session_id, pipeline, head, d2)
+                if gate_runner is not None:
+                    gate_started = time.perf_counter()
+                    gate_block = gate_runner.read(pipeline.belief, pipeline.last_fused,
+                                                  pipeline.status())
+                    gate_stall.add((time.perf_counter() - gate_started) * 1000.0)
+                _write_live_status(status_path, session_id, pipeline, head, d2,
+                                   gate=gate_block)
                 # The failure that must never be quiet again: the build has left the
                 # capture region, so every structure feature is reading zero. Shout
                 # once immediately, then every ~30 s while it persists.
@@ -526,14 +618,28 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
                           f"features read zero; the session will quarantine. The region "
                           f"lives per GAME LAUNCH: quit Minecraft fully, relaunch, and "
                           f"place the first block at the build site. !!!!")
-                print(_status_line(pipeline, reorderer, head))
+                line = _status_line(pipeline, reorderer, head)
+                if gate_block is not None:
+                    line += f"  gate:{gate_block['state']}"
+                worst = max(pipeline.stalls["moment"].worst_ms, gate_stall.worst_ms,
+                            snap_stall.worst_ms)
+                if worst:
+                    line += f"  worst-stall {worst:.0f}ms"
+                print(line)
                 for path in _snapshot_paths(jsonl, session_id):
                     if path not in seen_snapshots:
                         seen_snapshots.add(path)
                         snap_tick, snap_region, cells = load_snapshot(path)
-                        found = pipeline.on_snapshot(snap_tick, cells, snap_region)
-                        print(f"  snapshot @{snap_tick}: {len(found)} divergence(s)"
-                              + ("  ** QUARANTINED **" if monitor and monitor.quarantined else ""))
+                        pending_snaps.append((snap_tick, snap_region, cells))
+                ready = [snap for snap in pending_snaps
+                         if pipeline.last_tick is not None and snap[0] <= pipeline.last_tick]
+                pending_snaps = [snap for snap in pending_snaps if snap not in ready]
+                for snap_tick, snap_region, cells in sorted(ready, key=lambda snap: snap[0]):
+                    snap_started = time.perf_counter()
+                    found = pipeline.on_snapshot(snap_tick, cells, snap_region)
+                    snap_stall.add((time.perf_counter() - snap_started) * 1000.0)
+                    print(f"  snapshot @{snap_tick}: {len(found)} divergence(s)"
+                          + ("  ** QUARANTINED **" if monitor and monitor.quarantined else ""))
     except KeyboardInterrupt:
         ended = "interrupt"
         print("\n  stopped by hand; closing out")
@@ -541,10 +647,19 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
         ended = "stream_lost"
         print(f"\n  live stream lost ({error}); the disk recording remains complete")
 
+    # Snapshots still waiting for the stream to reach their tick: the stream is
+    # over, every delivered moment has been processed, so they are judgeable now
+    # — before finish(), so the monitor still holds its pending events.
+    for snap_tick, snap_region, cells in sorted(pending_snaps, key=lambda snap: snap[0]):
+        found = pipeline.on_snapshot(snap_tick, cells, snap_region)
+        print(f"  snapshot @{snap_tick} (end of stream): {len(found)} divergence(s)")
     summary = pipeline.finish()
     for handle in handles.values():
         handle.close()
-    _write_live_status(status_path, session_id, pipeline, head, d2)   # final ts marks the end
+    if gate_runner is not None:
+        gate_runner.close()
+    _write_live_status(status_path, session_id, pipeline, head, d2,
+                       gate=gate_block)   # final ts marks the end
     if head is not None:
         head.close()
         if head.enriched:
@@ -578,21 +693,38 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
         **summary,
         "gate_on_disk_pass": gate_pass,
     }
+    # The runner's own meters join the pipeline's (summary already carries those).
+    run_report["timings"]["gate_read"] = gate_stall.to_dict()
+    run_report["timings"]["snapshot_check"] = snap_stall.to_dict()
+    # The D6 §9 verdict, persisted where the audit reads it — not just printed.
+    proof_grade = (run_report["gate_live"]["clean"] and reorderer.counts.gap_ticks == 0
+                   and not run_report["quarantined"] and gate_pass)
+    run_report["proof_grade"] = proof_grade
     report_path = f"{base}.live_run.json"
     with open(report_path, "w", encoding="utf-8") as handle:
         json.dump(run_report, handle, indent=2)
-    proof_grade = (run_report["gate_live"]["clean"] and reorderer.counts.gap_ticks == 0
-                   and not run_report["quarantined"] and gate_pass)
     print(f"  run summary -> {os.path.basename(report_path)}"
           f"  (proof-grade: {'yes' if proof_grade else 'NO — see report'})")
     ok = ended == "eof" and not run_report["quarantined"] and gate_pass
     return 0 if ok else 1
 
 
+# Flags that CONSUME the next argument — their values are never session paths.
+_VALUE_FLAGS = ("--host", "--port", "--sgoal-stride", "--session", "--heads")
+
+
+def _positionals(argv: list[str]) -> list[str]:
+    return [a for i, a in enumerate(argv[1:], 1)
+            if not a.startswith("--") and argv[i - 1] not in _VALUE_FLAGS]
+
+
 def main() -> int:
-    positional = [a for i, a in enumerate(sys.argv[1:], 1)
-                  if not a.startswith("--")
-                  and sys.argv[i - 1] not in ("--host", "--port", "--sgoal-stride", "--session")]
+    positional = _positionals(sys.argv)
+    if positional and "--gate" in sys.argv:
+        # Gate replay: exercise the LIVE runner over a recorded session's banked
+        # evidence — the pre-demo proof that the in-world loop behaves.
+        from mica.gate.live_loop import replay_gate
+        return replay_gate(positional[0])   # always the calibrated v1 replay
     if positional:
         return _replay_check(positional[0])
     return _live(str(_flag_value("--host", "127.0.0.1")), int(_flag_value("--port", 25567)),

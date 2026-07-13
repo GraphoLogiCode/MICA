@@ -9,6 +9,78 @@
 
 ---
 
+# 🧱 D5 §9 PIN LIFTED — PLACEMENT ENABLED BEHIND `--place`: DECLARED-TARGET ROUTE, F4 AGENT-POSITION VETO, BODY EXECUTOR (2026-07-13, user decision)
+
+The pin's two preconditions were long met (calibrated heads 07-05; A7 in-game 07-04,
+session 193059). User decisions: declared-target route for the confidence bar (the
+GATHER precedent — under the current heads conf never reaches θ_place, D7 review F2),
+one block per gate read, human hands the agent its materials. Vault first: D5 §9 dated
+amendment + §10 Q1 live-half note; D7 §2 consumer table gains "placement authority"
+(quarantine intact — the declaration gates AUTHORITY, never content).
+
+**Change log:**
+- `mica/gate/fsm.py` — `FsmConfig.declared_place_enabled` (default OFF: banked
+  behavior bit-unchanged), `GateRead.agent_pos` + `place_declared`, the proximity
+  veto's third half (human within 4 blocks of the AGENT's body → YIELD immediately —
+  review F4 closed), PLACE branch: conf ≥ θ_place OR declared target (config-armed).
+- `mica/gate/live_loop.py` — `place=True` lifts the pin (`demo` follows); one
+  placement directive per read (`gate.place: {id, cell, block, route}`) — first
+  committed action only, Place only, cell not already agent-filled (`agent_cells`,
+  optimistic + fed by A7-tagged events: the re-propose guard, since agent placements
+  never enter evidence); trace rows carry `authority: "demo"|"place"` and real
+  `committed_actions` (route `declared`/`confidence`); materials report's
+  `committed_places` counts directives. Directive ids carry a per-run token (a body
+  outliving a re-attached mind must never skip a fresh run's ids — review F2).
+- `scripts/run_live.py` — `--place` (loud banner; default stays demo; replay_gate
+  and counterfactual untouched).
+- `capture/mineflayer-bot/placement_math.js` (+ node tests) — support-face search
+  (below > sides > above) and eye-to-cell reach; `agent.js` — `runPlaceErrand`
+  mirroring gather: one errand at a time, walk with a 20 s timeout (review F3),
+  re-check fresh gate state after walking + cell empty + support face, equip, place,
+  verify, report (`placing`/`last_place` ride the status file); "stop" halts
+  placement AND gather, "go on" re-arms; spawn message updated.
+- `scripts/audit_gate_trace.py` — per-segment authority from the trace's own rows;
+  place criteria: ≤1 committed action/read, place_low_risk state only, reversible,
+  traceable, route verified (confidence → conf ≥ θ_place from the row's own snapshot;
+  declared → session present in declared_targets.json); GATHER now a legal state;
+  declared-route candidates re-derived via their reason. All 29 banked traces PASS.
+- Tests: suite 312 → **326 green** (declared route × config/veto/hysteresis, agent-
+  body veto, directive emission + suppression + id uniqueness, materials count,
+  demo-unchanged regressions); `node --check` + placement_math node tests clean.
+
+**Review** (`2026-07-13 - D5 Placement Enablement Review (mica-review)`): 1 BLOCKER
+fixed same sitting (`isSolidAt` tested `boundingBox === 'solid'`; mineflayer says
+`'block'` — every placement would have silently failed "no support face"), 2 MAJOR
+fixed (directive-id collision across mind restarts; walk timeout), F5–F7 accepted and
+documented. **Wire rehearsal** (194242 @10x, `--heads v1 --place`): proof-grade YES,
+zero gaps, 259 reads all `authority: "place"`, ZERO directives (no declaration for
+that session — the dormant case behaves exactly as frozen), audit PASS.
+
+**Still open before the first placement session:**
+- [ ] **P-1 — auditor B0 cross-check (review F4)**: committed directives vs the
+  session's actual MICA_AI place events, both directions. Required before any
+  UNsupervised placement session; the first supervised one can precede it.
+- [ ] **P-2 — watcher vs --place (review F8)**: `lan_autostart.js` spawns run_live
+  WITHOUT `--place` and owns the single-consumer socket. For the supervised session:
+  stop the watcher, run `python scripts/run_live.py --heads v1 --place` by hand, and
+  confirm the "PLACEMENT ENABLED" banner. A `MICA_PLACE=1` passthrough is the later
+  unattended option (deliberately not wired yet).
+- [ ] **P-3 — gather walk timeout**: the gather errand shares F3's unguarded goto;
+  give it the same 20 s race when gather next gets touched.
+
+**PLACEMENT RUNBOOK (supersedes the 07-06 demo runbook's placement half):** 1) stop
+the rig watcher; 2) launch the game, singleplayer + Open to LAN; 3) `python
+scripts/run_live.py --heads v1 --place` (sight the banner); 4) `node
+capture/mineflayer-bot/agent.js`; 5) declare the session's target in the
+after-session tool (declarations key by session id, live from game launch — the gate
+re-reads per second); 6) hand MICA_AI a stack of the build's block; 7) build, then
+step ≥4 blocks away and idle. Expect SUGGEST/PREVIEW first (M=3 hysteresis), then ONE
+block per read while the window stays safe; walking toward the agent or its target
+must drop it to YIELD the same read; "stop" halts everything. Afterward:
+`audit_gate_trace.py` on the session (PASS required), B0 events show the placements
+as MICA_AI, D1/D2 evidence excludes them (A7), materials report shows
+`committed_places` > 0.
+
 # 🔬 D5 GATE VALIDATED END-TO-END + DATA LIFECYCLE FIXED + STORAGE MADE AUDITABLE (2026-07-09)
 
 The D5-gate confirmation pass the user asked for, plus the after-session data audit.

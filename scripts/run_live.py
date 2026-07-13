@@ -10,6 +10,15 @@ recording through the identical live path and prove it matches the offline wrapp
                                                      MICA_H3D=1 does the same — every B2 record
                                                      then carries h3d, so the fused evidence holds
                                                      BOTH model channels (the adapter's inputs)
+    python scripts/run_live.py --place               lift the D5 §9 demo pin (amendment
+                                                     2026-07-12): the gate may authorize ONE
+                                                     reversible placement per read, licensed by
+                                                     theta_place or the session's DECLARED
+                                                     target; the agent's body executes it.
+                                                     Off by default — the demo posture stands.
+    python scripts/run_live.py --gather              allow the GATHER state (D5 §4 amendment):
+                                                     fetch whitelisted materials for a declared
+                                                     or theta_place-confident target
     python scripts/run_live.py --session <jsonl>     attach to a named session instead of
                                                      discovering the freshest one (rehearsals)
     python scripts/run_live.py <session.jsonl>       replay + golden-equivalence check (exit 0/1)
@@ -543,12 +552,23 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
             # can fire when materials are missing for the declared (or confidently
             # inferred) target. Off by default so banked behavior is bit-unchanged.
             gather = "--gather" in sys.argv
-            gate_runner = LiveGateRunner(f"{base}.gate_trace.jsonl", params, demo=True,
-                                         preload=True, session_id=session_id,
-                                         gather=gather)
-            print("  D5 gate: LIVE, decoder pre-warmed (demo config — observe/suggest/"
-                  "preview only" + ("; GATHER enabled" if gather else "")
-                  + "; trace -> " + os.path.basename(base) + ".gate_trace.jsonl)")
+            # --place lifts the §9 demo pin (amendment 2026-07-12, user decision):
+            # the gate may authorize ONE reversible placement per read, licensed by
+            # theta_place or by the session's declared target. Everything else —
+            # no flag, replays, counterfactual — keeps the demo posture.
+            place = "--place" in sys.argv
+            gate_runner = LiveGateRunner(f"{base}.gate_trace.jsonl", params,
+                                         demo=not place, preload=True,
+                                         session_id=session_id,
+                                         gather=gather, place=place)
+            if place:
+                print("  D5 gate: LIVE — !! PLACEMENT ENABLED !! (§9 amendment: "
+                      "declared-target route, 1 block per read, reversible only; "
+                      "say 'stop' in chat to halt the agent)")
+            else:
+                print("  D5 gate: LIVE, decoder pre-warmed (demo config — observe/"
+                      "suggest/preview only" + ("; GATHER enabled" if gather else ""))
+            print("    trace -> " + os.path.basename(base) + ".gate_trace.jsonl")
         else:
             print("  D5 gate: OFF (no decoder/gate freeze on disk)")
     status_path = os.path.join(os.path.dirname(os.path.abspath(jsonl)), "live_status.json")

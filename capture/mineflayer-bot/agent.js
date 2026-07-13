@@ -13,13 +13,17 @@
 // script discovers the LAN world automatically (Minecraft announces LAN games on
 // multicast 224.0.2.60:4445); set MICA_PORT to skip discovery.
 //
-// AUTHORITY (D5, presence v1.1 "active shadowing", pinned 2026-07-04): the agent
-// TRACES the player but never builds. It follows at a 4-8 block band (paths closer
-// beyond 8, backs away inside 4), stays out of the human's workspace (backs off
-// the pipeline's focus block), looks where the pipeline says the human's attention
-// is, and may say ONE throttled advisory line about what the belief tracker
-// currently believes. Placement stays disabled; the one exception is the explicit
-// A7 test flag, used during a smoke session to verify the actor filter in-game.
+// AUTHORITY (D5, presence v1.1 "active shadowing", pinned 2026-07-04; §9 amendment
+// 2026-07-12): the agent TRACES the player. It follows at a 4-8 block band (paths
+// closer beyond 8, backs away inside 4), stays out of the human's workspace (backs
+// off the pipeline's focus block), looks where the pipeline says the human's
+// attention is, and may say ONE throttled advisory line about what the belief
+// tracker currently believes. The body changes the world ONLY on the mind's gate
+// blocks: a 'gather' state runs one whitelisted fetch errand, a 'place_low_risk'
+// state with a directive places exactly ONE mind-authorized reversible block —
+// both exist only when run_live was started with their flags (--gather / --place),
+// and chat "stop" halts either instantly. The A7 test flag remains the smoke-only
+// exception that places without the gate.
 //
 // THE AGENT'S MIND lives in run_live.py (D1 behavior + D2 structure + belief, and
 // with --pixels the VPT/MineCLIP head). This script is only the BODY: it reads the
@@ -46,6 +50,7 @@ const path = require('path');
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const patrolMath = require('./patrol_math');   // coverage patrol v2: the pure math
+const placeMath = require('./placement_math'); // gate placement: the pure math
 const Vec3 = require('vec3');
 
 const HOST = process.env.MICA_HOST || '127.0.0.1';
@@ -221,6 +226,13 @@ function start(port) {
   const deniedSubstitutes = new Set(); // "block:substitute" refused — never re-asked
   let pendingAsk = null;               // {block, substitute, atMs} awaiting yes/no
   let lastMaterialAskMs = 0;
+  // --- gate placement (D5 §9 amendment 2026-07-12): the body executes ONE mind-
+  // authorized block at a time, and only while the gate keeps saying so.
+  let placing = null;                  // { id, cell, block } while an errand runs
+  let placeStopped = false;            // the human said stop — stands until "go on"
+  let lastPlaceResult = null;          // { id, cell, block, ok, note } of the last errand
+  const placedDirectives = new Set();  // directive ids already acted on (never repeat)
+  let lastPlaceChatMs = 0;
   function inventorySnapshot() {
     const counts = {};
     try {
@@ -250,6 +262,11 @@ function start(port) {
       last_action: lastAction,
       inventory: inventorySnapshot(),
       material_grants: materialGrants,
+      // The placement story, mind-readable: the errand in flight (if any) and the
+      // last completed directive's outcome. The B0 capture stays the authoritative
+      // record of what actually landed (actor MICA_AI); this is the live readout.
+      placing: placing ? { id: placing.id, cell: placing.cell, block: placing.block } : null,
+      last_place: lastPlaceResult,
     }) + '\n';
     try { fs.appendFileSync(statusPath, line); } catch (err) { /* disk hiccup: skip a beat */ }
   }
@@ -347,6 +364,7 @@ function start(port) {
   function followTick() {
     if (agentState !== 'present') return;
     if (gathering) return;   // a gather errand owns the pathfinder until it ends
+    if (placing) return;     // so does a placement errand
     const human = nearestHuman();
     if (!human || !human.entity) {
       if (followMode !== 'searching') { setGoal(null); followMode = 'searching'; }
@@ -418,6 +436,7 @@ function start(port) {
   // crosshair rests, which is what "watching what the player does" means.
   function lookTick() {
     if (agentState !== 'present') return;
+    if (placing) return;     // placeBlock manages its own aim; don't yank the view
     if (followMode === 'patrolling' && patrolCluster) {
       // On patrol the eyes belong to the scan: a two-axis sweep across the
       // cluster's own extent (patrol v2 — the old fixed pendulum never crossed
@@ -484,6 +503,14 @@ function start(port) {
       // window, hysteresis); the body announces and runs ONE errand at a time.
       runGatherErrand(liveStatus, gate.gather);
       lastAction = 'gate: gather';
+    } else if (gate.state === 'place_low_risk' && gate.place && !placing && !gathering
+               && !placeStopped && agentState === 'present'
+               && !placedDirectives.has(gate.place.id)) {
+      // The mind authorized exactly ONE reversible block (§9 amendment: declared
+      // target or theta_place, staircase, materials, safe window, hysteresis all
+      // already cleared). The body walks, re-checks the live world, places once.
+      runPlaceErrand(gate.place);
+      lastAction = 'gate: place';
     }
     // The materials ask (D5 §4): substitution is never silent — when the gate says
     // it is short a block and sees a same-family stand-in in the inventory, ask
@@ -564,6 +591,80 @@ function start(port) {
     }
   }
 
+  // --- gate placement errand (D5 §9 amendment, 2026-07-12) --------------------
+  // Runs ONLY while the REAL gate publishes state === 'place_low_risk' with a
+  // directive the body has not seen before. The mind already authorized it; the
+  // body still re-checks the live world (the cell must be empty, a support face
+  // must exist) because the mind's world knowledge is one second old, and it
+  // re-reads the gate after walking because authority can drop mid-approach.
+  function isSolidAt(x, y, z) {
+    // prismarine-block's boundingBox is 'block' or 'empty' — 'block' is the
+    // solid case (isAirAt above tests the other side of the same coin).
+    const block = bot.blockAt(new Vec3(x, y, z));
+    return !!block && block.boundingBox === 'block';
+  }
+
+  function finishPlace(directive, ok, note) {
+    lastPlaceResult = { id: directive.id, cell: directive.cell,
+                        block: directive.block, ok, note };
+    lastAction = ok ? `placed ${directive.block} @ (${directive.cell})`
+                    : `place skipped: ${note}`;
+    if (!ok) console.log(`[${NAME}] directive ${directive.id} not placed: ${note}`);
+  }
+
+  async function runPlaceErrand(directive) {
+    placedDirectives.add(directive.id);   // one attempt per directive, ever
+    placing = { id: directive.id, cell: directive.cell, block: directive.block };
+    const [cx, cy, cz] = directive.cell;
+    const now = Date.now();
+    if (now - lastPlaceChatMs > ADVISORY_GAP_MS && process.env.MICA_QUIET !== '1') {
+      lastPlaceChatMs = now;   // one line per burst, not one per block
+      bot.chat(`Adding ${directive.block} to the build — say stop to cancel.`);
+    }
+    try {
+      const item = bot.inventory.items().find((i) => i.name === directive.block);
+      if (!item) return finishPlace(directive, false, 'block not in inventory');
+      const me = bot.entity.position;
+      if (!placeMath.withinReach([me.x, me.y, me.z], directive.cell)) {
+        // An unreachable target must not freeze the body (review 2026-07-13 F3):
+        // race the walk against a hard timeout; the finally clears the goal.
+        await Promise.race([
+          bot.pathfinder.goto(new goals.GoalNear(cx, cy, cz, 3)),
+          new Promise((_, reject) => setTimeout(
+            () => reject(new Error('walk timed out')), 20000)),
+        ]);
+      }
+      if (placeStopped || !placing) return finishPlace(directive, false, 'stopped');
+      // Authority can drop while walking (the human came back): obey the freshest
+      // gate state, not the one that started the errand.
+      const fresh = readLiveStatus();
+      if (!fresh || !fresh.gate || fresh.gate.state !== 'place_low_risk') {
+        return finishPlace(directive, false, 'gate withdrew during approach');
+      }
+      const target = bot.blockAt(new Vec3(cx, cy, cz));
+      if (target && target.boundingBox !== 'empty') {
+        return finishPlace(directive, false, 'cell no longer empty');
+      }
+      const support = placeMath.supportFor(directive.cell, isSolidAt);
+      if (!support) return finishPlace(directive, false, 'no support face to click');
+      await bot.equip(item, 'hand');
+      const ref = bot.blockAt(new Vec3(support.ref[0], support.ref[1], support.ref[2]));
+      if (!ref) return finishPlace(directive, false, 'support block unloaded');
+      await bot.placeBlock(ref, new Vec3(support.face[0], support.face[1], support.face[2]));
+      const landed = bot.blockAt(new Vec3(cx, cy, cz));
+      const ok = !!landed && landed.name === directive.block;
+      finishPlace(directive, ok, ok ? null : `landed ${landed ? landed.name : 'nothing'}`);
+      if (ok) console.log(`[${NAME}] placed ${directive.block} @ (${cx},${cy},${cz})`
+        + ` [directive ${directive.id}, route ${directive.route}]`);
+    } catch (err) {
+      finishPlace(directive, false, err.message);
+    } finally {
+      placing = null;
+      try { bot.pathfinder.setGoal(null); } catch (e) { /* mid-respawn */ }
+      writeStatus();   // publish the outcome now, not up to 250 ms later
+    }
+  }
+
   // The human's answer to a pending materials ask, and the gather kill-switch.
   // Only an explicit "yes" grants the one block->substitute equivalence
   // (session-scoped); "no" is remembered so the same question is never asked
@@ -572,15 +673,18 @@ function start(port) {
     if (username === NAME) return;
     const said = String(message).trim().toLowerCase();
     if (/^stop\b/.test(said)) {
-      if (gathering) bot.chat('Stopping — errand dropped.');
+      if (gathering || placing) bot.chat('Stopping — errand dropped.');
       gathering = null;
+      placing = null;
       gatherStopped = true;
+      placeStopped = true;   // one word halts every autonomous world change
       try { bot.pathfinder.setGoal(null); } catch (e) { /* mid-respawn */ }
       return;
     }
-    if (/^(go on|resume)\b/.test(said) && gatherStopped) {
+    if (/^(go on|resume)\b/.test(said) && (gatherStopped || placeStopped)) {
       gatherStopped = false;
-      bot.chat('Okay — I may gather again when materials run short.');
+      placeStopped = false;
+      bot.chat('Okay — I may gather or place again when the gate allows it.');
       return;
     }
     if (!pendingAsk) return;
@@ -724,8 +828,10 @@ function start(port) {
 
   bot.once('spawn', () => {
     agentState = 'present';
-    console.log(`[${NAME}] joined ${HOST}:${port} (mc ${VERSION}) — shadowing, placement disabled`);
-    bot.chat(`${NAME} online — I'll follow and watch; placement disabled (D5 v1.1).`);
+    console.log(`[${NAME}] joined ${HOST}:${port} (mc ${VERSION}) — shadowing; world`
+      + ' changes only when the gate authorizes them');
+    bot.chat(`${NAME} online — I'll follow and watch; I only build or gather when `
+      + `the gate says so, and "stop" always halts me.`);
     ensureFlowViz();
     writeStatus();
 

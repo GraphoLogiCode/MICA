@@ -112,6 +112,61 @@ def test_mixed_upward_flicker_never_accumulates_into_authority():
         assert held_preview.state is GateState.OBSERVE
 
 
+_PLACE_CONFIG = FsmConfig(theta_suggest=0.10, theta_place=0.20, m_consecutive=2,
+                          declared_place_enabled=True)
+
+
+def test_declared_target_clears_the_place_bar_when_armed():
+    # conf 0.16 < theta_place 0.20 — confidence alone says PREVIEW...
+    low_conf = _read(p_top=0.2, place_declared=True)
+    decision, candidate = GateFsm(_PLACE_CONFIG).read(low_conf)
+    assert candidate is GateState.PLACE_LOW_RISK      # ...the declaration licenses it
+    assert "DECLARED target" in decision.reason
+
+
+def test_declared_route_is_dead_unless_config_armed():
+    # same read, default config: --place never ran, so the declaration is inert
+    low_conf = _read(p_top=0.2, place_declared=True)
+    assert _candidate(low_conf) is GateState.PREVIEW
+
+
+def test_declared_route_needs_the_actual_declaration():
+    assert _candidate(_read(p_top=0.2, place_declared=False),
+                      _PLACE_CONFIG) is GateState.PREVIEW
+
+
+def test_declared_route_never_overrides_reversibility_or_vetoes():
+    declared = dict(p_top=0.2, place_declared=True)
+    assert _candidate(_read(prefix_fully_reversible=False, **declared),
+                      _PLACE_CONFIG) is GateState.PREVIEW
+    assert _candidate(_read(player_pos=(1.0, 64.0, 1.0), **declared),
+                      _PLACE_CONFIG) is GateState.YIELD
+    assert _candidate(_read(idle=False, **declared),
+                      _PLACE_CONFIG) is GateState.OBSERVE
+
+
+def test_declared_route_still_pays_the_hysteresis_toll():
+    fsm = GateFsm(_PLACE_CONFIG)
+    held, candidate = fsm.read(_read(p_top=0.2, place_declared=True))
+    assert candidate is GateState.PLACE_LOW_RISK
+    assert held.state is GateState.OBSERVE            # streak 1 of 2: held
+    second, _ = fsm.read(_read(p_top=0.2, place_declared=True))
+    assert second.state is GateState.PLACE_LOW_RISK
+
+
+def test_human_next_to_the_agent_body_vetoes():
+    # target is far from the human, but the human walked up to the agent itself
+    # (D5 §10 Q1 live half): YIELD, immediately.
+    crowded = _read(player_pos=(20.0, 64.0, 20.0), agent_pos=(21.0, 64.0, 20.0))
+    decision, candidate = GateFsm(_CONFIG).read(crowded)
+    assert candidate is GateState.YIELD
+    assert "from the agent" in decision.reason
+
+
+def test_agent_pos_none_keeps_offline_reads_unchanged():
+    assert _candidate(_read(agent_pos=None)) is GateState.PLACE_LOW_RISK
+
+
 def test_execute_chunk_is_unreachable_in_v1():
     combos = itertools.product((True, False), (0, 3), (True, False, None),
                                (0.05, 0.9), (0.0, 1.0))

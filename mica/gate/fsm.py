@@ -3,15 +3,20 @@
 This is D5 §3's pseudocode made executable, wrapping the D4 commit gate that
 mica/gate/commit.py already computes. Order of authority inside one read:
 
-  1. the single HARD veto — the human is close to the agent's target, or the
+  1. the single HARD veto — the human is close to the agent's target, close to
+     the agent's own body (D5 §10 Q1's live half, wired 2026-07-12), or the
      target sits inside their workspace (the focus region) -> YIELD;
   2. the human is mid-action (not idle) -> OBSERVE;
   3. the safe window — the human is idle and not proximal:
        K_commit = 0:  SUGGEST if the discounted confidence clears theta_suggest,
                       else OBSERVE (uncertainty produces silence, not a guess)
        K_commit >= 1: PLACE_LOW_RISK only when the committed prefix is entirely
-                      reversible AND the discounted confidence clears theta_place
-                      AND the config allows placement; otherwise PREVIEW.
+                      reversible AND the confidence bar is cleared AND the config
+                      allows placement; otherwise PREVIEW. The bar (D5 §9
+                      amendment 2026-07-12): conf >= theta_place, OR the human
+                      DECLARED this session's build target — the declaration is
+                      the human's own word, so it licenses authority the same way
+                      it licenses gathering; it never shapes WHAT is proposed.
 
 Reasoning mode is a soft feature, never a veto: conf = p* x (1 - P(z=1)) — a
 heuristic-mode human carries no goal information, so confidence is discounted, not
@@ -95,6 +100,10 @@ class FsmConfig:
     execute_chunk_enabled: bool = False     # v1: always off
     gather_enabled: bool = False            # D5 §4 amendment 2026-07-10: off by default,
                                             # so every banked behavior is bit-unchanged
+    declared_place_enabled: bool = False    # D5 §9 amendment 2026-07-12: a declared
+                                            # target may clear the place bar; armed only
+                                            # by run_live --place, so banked behavior
+                                            # is bit-unchanged everywhere else
 
     def __post_init__(self):
         if not self.theta_place > self.theta_suggest:
@@ -121,6 +130,12 @@ class GateRead:
     # gathering outright; an inferred target must clear theta_place instead).
     gather_wanted: bool = False
     gather_declared: bool = False
+    # The agent's own body (D5 §10 Q1 live half, 2026-07-12): the veto also fires
+    # when the human stands close to the agent itself. None offline — bit-unchanged.
+    agent_pos: tuple[float, float, float] | None = None
+    # The human declared this session's build target (D5 §9 amendment 2026-07-12):
+    # with declared_place_enabled, that word clears the placement confidence bar.
+    place_declared: bool = False
 
 
 def _distance(a, b) -> float:
@@ -129,15 +144,25 @@ def _distance(a, b) -> float:
 
 def proximity_of(read: GateRead, config: FsmConfig) -> tuple[float | None, str | None]:
     """(logged proximity value, veto reason or None). The value is the human-to-
-    target distance; the veto also fires when the target invades the workspace."""
+    target distance; the veto also fires when the target invades the workspace,
+    or — when the caller supplies the agent's own position (live place mode) —
+    when the human stands next to the agent itself."""
+    distance = None
+    if read.target_cell is not None and read.player_pos is not None:
+        distance = _distance(read.player_pos, read.target_cell)
+    # The agent-body half (D5 §10 Q1 live half, 2026-07-12): acting while the
+    # human is crowded up against the agent is vetoed no matter where the target
+    # is. Offline reads carry no agent_pos, so they are bit-unchanged.
+    if read.agent_pos is not None and read.player_pos is not None:
+        body = _distance(read.player_pos, read.agent_pos)
+        if body <= config.proximal_radius:
+            return distance, (f"human {body:.1f} blocks from the agent "
+                              f"(radius {config.proximal_radius})")
     if read.target_cell is None:
         return None, None
-    distance = None
-    if read.player_pos is not None:
-        distance = _distance(read.player_pos, read.target_cell)
-        if distance <= config.proximal_radius:
-            return distance, (f"human {distance:.1f} blocks from target "
-                              f"(radius {config.proximal_radius})")
+    if distance is not None and distance <= config.proximal_radius:
+        return distance, (f"human {distance:.1f} blocks from target "
+                          f"(radius {config.proximal_radius})")
     if read.focus_block is not None:
         workspace = _distance(read.focus_block, read.target_cell)
         if workspace <= config.workspace_radius:
@@ -185,12 +210,18 @@ class GateFsm:
                 candidate, why = GateState.OBSERVE, (
                     f"conf {confidence:.3f} below theta_suggest {config.theta_suggest}")
         else:
+            # The place bar (D5 §9 amendment 2026-07-12): confidence clears it, or
+            # the human's own declared target does — the declaration is consent for
+            # authority, never input to the proposal.
+            by_confidence = confidence >= config.theta_place
+            by_declaration = config.declared_place_enabled and gate_read.place_declared
             placeable = (gate_read.prefix_fully_reversible is True
-                         and confidence >= config.theta_place)
+                         and (by_confidence or by_declaration))
             if placeable and config.place_low_risk_enabled:
                 candidate, why = GateState.PLACE_LOW_RISK, (
                     f"reversible prefix, conf {confidence:.3f} >= "
-                    f"theta_place {config.theta_place}")
+                    f"theta_place {config.theta_place}" if by_confidence else
+                    f"reversible prefix, DECLARED target (conf {confidence:.3f})")
             elif placeable:
                 candidate, why = GateState.PREVIEW, "placement disabled by config"
             elif gate_read.prefix_fully_reversible is not True:

@@ -83,6 +83,140 @@ def test_human_cell_tracking_ignores_the_agent(runner):
     assert runner.human_cells == set()      # placed then broken; agent's never entered
 
 
+# --- the place config (§9 amendment 2026-07-12) ---------------------------------
+
+def _peaked_belief(p_top=0.66, z1_share=0.6):
+    """A belief whose top goal clears the staircase's theta_1 while the discounted
+    conf = p_top * (1 - p_z1) stays BELOW theta_place — the exact regime the
+    declared-target route exists for."""
+    belief = {key: 0.0 for key in uniform_belief()}
+    rest = (1.0 - p_top) / 8
+    for key in belief:
+        belief[key] = rest
+    belief[("habitation", 1)] = p_top * z1_share
+    belief[("habitation", 0)] = p_top * (1 - z1_share)
+    total = sum(belief.values())
+    return {key: value / total for key, value in belief.items()}
+
+
+@pytest.fixture()
+def place_runner(tmp_path, monkeypatch):
+    if not gate_ready():
+        pytest.skip("no decoder/gate freeze on this machine")
+    from mica.contracts.b5 import ProposalChunk
+    from mica.decoder.grammar import Place
+    from mica.gate import live_loop
+    from mica.intent import heads_v1
+
+    proposal = ProposalChunk(
+        actions=(Place(dx=1, dy=0, dz=1, block="minecraft:oak_planks"),),
+        token_conf=(1.0,), rationale_goal="habitation")
+    monkeypatch.setattr(live_loop.decoder_model, "propose",
+                        lambda model, ctx, n: (proposal, None))
+    gate = LiveGateRunner(str(tmp_path / "trace.jsonl"), heads_v1.tracker_params(),
+                          session_id="test-session", place=True)
+    gate.model = object()                    # already "loaded": skip the real torch load
+    gate.origin = (0, 64, 0)
+    gate._declared = lambda: {"goal": "habitation", "subtype": "cabin"}
+    # agent body well outside the human's proximal radius (the F4 veto is real:
+    # putting it at the human's feet turns every read into YIELD)
+    gate.materials_source = lambda: ({"oak_planks": 8}, {}, (18.0, 64.0, 6.0))
+    yield gate
+    gate.close()
+
+
+def _safe_status():
+    return {"current_behavior": "idle", "player_pos": (30.0, 64.0, 30.0),
+            "focus_block": None, "belief_snapshot_id": 100}
+
+
+def test_place_config_arms_the_gate_and_the_declared_route(place_runner):
+    assert place_runner.fsm.config.place_low_risk_enabled is True
+    assert place_runner.fsm.config.declared_place_enabled is True
+    assert place_runner.fsm.config.execute_chunk_enabled is False
+
+
+def test_declared_route_emits_one_directive_then_suppresses_the_filled_cell(
+        place_runner, tmp_path):
+    belief = _peaked_belief()
+    blocks = [place_runner.read(belief, fused_record(), _safe_status())
+              for _ in range(4)]
+    # hysteresis (M=3) holds the first reads; the directive appears exactly once
+    directives = [b["place"] for b in blocks if b["place"]]
+    assert len(directives) == 1
+    directive = directives[0]
+    assert directive["block"] == "oak_planks"
+    assert directive["cell"] == [1, 64, 1]           # origin (0,64,0) + (1,0,1)
+    assert directive["route"] == "declared"          # conf is below theta_place here
+    # the cell is remembered: later reads of the same proposal emit nothing
+    later = place_runner.read(belief, fused_record(), _safe_status())
+    assert later["place"] is None
+    place_runner.trace.flush()
+    rows = [json.loads(line) for line in
+            (tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert all(row["authority"] == "place" for row in rows)
+    committed = [row for row in rows if row["committed_actions"]]
+    assert len(committed) == 1
+    action = committed[0]["committed_actions"][0]
+    assert action["reversible"] is True and action["route"] == "declared"
+    assert committed[0]["belief_snapshot_id"] is not None
+    assert any("already filled by the agent" in row["reason"] for row in rows)
+
+
+def test_directive_ids_never_collide_across_runner_restarts(place_runner, tmp_path):
+    # The body outlives a re-attached mind and remembers executed ids — a fresh
+    # runner restarting its read counter at 1 must still mint globally new ids
+    # (review 2026-07-13 F2).
+    from mica.intent import heads_v1
+
+    belief = _peaked_belief()
+    first_ids = [b["place"]["id"] for b in
+                 (place_runner.read(belief, fused_record(), _safe_status())
+                  for _ in range(4)) if b["place"]]
+    second = LiveGateRunner(str(tmp_path / "trace2.jsonl"), heads_v1.tracker_params(),
+                            session_id="test-session", place=True)
+    second.model = object()
+    second.origin = (0, 64, 0)
+    second._declared = place_runner._declared
+    second.materials_source = place_runner.materials_source
+    second._run_token = place_runner._run_token + 1   # a later start, deterministic
+    second_ids = [b["place"]["id"] for b in
+                  (second.read(belief, fused_record(), _safe_status())
+                   for _ in range(4)) if b["place"]]
+    second.close()
+    assert first_ids and second_ids
+    assert not set(first_ids) & set(second_ids)
+
+
+def test_place_directive_counts_into_the_materials_report(place_runner, tmp_path):
+    belief = _peaked_belief()
+    for _ in range(4):
+        place_runner.read(belief, fused_record(), _safe_status())
+    place_runner.close()
+    report = json.loads(
+        (tmp_path / "trace.materials_report.json").read_text(encoding="utf-8"))
+    assert report["committed_places"] == 1
+
+
+def test_demo_reads_carry_no_directive_and_demo_authority(runner, tmp_path):
+    status = {"current_behavior": "idle", "player_pos": (30.0, 64.0, 30.0),
+              "focus_block": None, "belief_snapshot_id": 100}
+    block = runner.read(uniform_belief(), fused_record(), status)
+    assert block["place"] is None
+    runner.trace.flush()
+    rows = [json.loads(line) for line in
+            (tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rows[-1]["authority"] == "demo"
+
+
+def test_agent_events_feed_the_repropose_guard(runner):
+    runner.ingest_events([
+        BlockEvent(event_id=3, pos=BlockPos(5, 64, 5), block_type="minecraft:stone",
+                   op=BlockOp.PLACE, actor="MICA_AI"),
+    ])
+    assert (5, 64, 5) in runner.agent_cells
+
+
 def test_arm0_neutral_derivation_sides():
     assert commit.derive_arm0_neutral(0.7, theta_1=0.5) == 0.52
     assert commit.derive_arm0_neutral(0.1, theta_1=0.5) == 0.2

@@ -56,6 +56,22 @@ documented. **Wire rehearsal** (194242 @10x, `--heads v1 --place`): proof-grade 
 zero gaps, 259 reads all `authority: "place"`, ZERO directives (no declaration for
 that session — the dormant case behaves exactly as frozen), audit PASS.
 
+**Addendum (2026-07-13, after the first two live attempts — user decision "agent
+asks, you provide"):** session 013710 proved the mind side beyond expectation —
+**4 placement directives committed via the CONFIDENCE route** (conf 0.43–0.50 ≥
+θ_place 0.4, the first time the live belief has ever cleared it; no declaration
+needed) — but no body was in-game (runbook step 4 skipped). The next session
+(014619) had the body, and the hand-over gave logs while the decoder proposed
+stone_bricks: the exact-block constraint reported `missing: {stone_bricks: 8}`
+SILENTLY, because the substitution ask only fires when a same-family stand-in is in
+stock. Fix shipped: the status gate block carries `authority`; when placement is
+armed and a shortage has no substitute ask, the agent SAYS what it needs in chat
+(once per distinct missing set) and confirms receipt the moment the block lands in
+its inventory. Creative-mode self-provisioning (`/give`) was considered and
+REJECTED — it would void the D5 §4 scarcity pin and the D7 sufficiency/gather
+layer; the dated note lives in D5 §4. Runbook step 6 below becomes: hand it the
+build's block, or just wait for it to ask.
+
 **Still open before the first placement session:**
 - [ ] **P-1 — auditor B0 cross-check (review F4)**: committed directives vs the
   session's actual MICA_AI place events, both directions. Required before any

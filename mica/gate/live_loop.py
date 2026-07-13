@@ -270,7 +270,8 @@ class LiveGateRunner:
                "committed_actions": []}
         self.trace.write(json.dumps(row) + "\n")
         self.trace.flush()
-        return {"state": "observe", "reason": reason, "k_commit": 0}
+        return {"state": "observe", "reason": reason, "k_commit": 0,
+                "authority": "place" if self.place else "demo"}
 
     def read(self, belief, fused, status: dict) -> dict:
         """One gate read. Returns the status-file "gate" block; flushes a trace row."""
@@ -342,6 +343,9 @@ class LiveGateRunner:
                 "k_commit": held_k,
                 "conf": round(gate_read.p_top * (1 - gate_read.p_z1), 4),
                 "p_star": round(gate_read.p_top, 4),
+                # The body speaks up about shortages only when placement is armed —
+                # asking for materials the config would never let it place is noise.
+                "authority": "place" if self.place else "demo",
                 "target_cell": list(target) if target else None,
                 "proposal_summary": summary,
                 "materials": self._materials_block,

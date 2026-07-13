@@ -226,6 +226,12 @@ function start(port) {
   const deniedSubstitutes = new Set(); // "block:substitute" refused — never re-asked
   let pendingAsk = null;               // {block, substitute, atMs} awaiting yes/no
   let lastMaterialAskMs = 0;
+  // The shortage request ("agent asks, you provide", 2026-07-13): what the agent
+  // has asked the human for, and the last voiced shortage so it never repeats
+  // itself for the same missing set.
+  const neededBlocks = new Set();
+  let lastNeedSig = null;
+  let lastNeedMs = 0;
   // --- gate placement (D5 §9 amendment 2026-07-12): the body executes ONE mind-
   // authorized block at a time, and only while the gate keeps saying so.
   let placing = null;                  // { id, cell, block } while an errand runs
@@ -527,6 +533,26 @@ function start(port) {
         + `${ask.substitute} instead? say yes or no`);
       lastAction = `materials ask: ${ask.block} -> ${ask.substitute}`;
     }
+    // The shortage request (user decision 2026-07-13: "agent asks, you provide").
+    // When placement is armed and the gate is short a block with NO substitute to
+    // offer (ask above is null), say plainly what is needed so the human can toss
+    // it over. Once per shortage — a new request only when the missing set changes
+    // — and the thank-you in liveTick confirms receipt.
+    const missing = (gate.materials && gate.materials.missing) || {};
+    const needSig = Object.keys(missing).sort()
+      .map((block) => `${block}:${missing[block]}`).join(',');
+    if (gate.authority === 'place' && needSig && !ask && !placeStopped
+        && agentState === 'present' && process.env.MICA_QUIET !== '1'
+        && needSig !== lastNeedSig && now - lastNeedMs >= ADVISORY_GAP_MS) {
+      lastNeedMs = now;
+      lastNeedSig = needSig;
+      const wants = Object.keys(missing).sort()
+        .map((block) => `${missing[block]} ${block}`).join(', ');
+      bot.chat(`I need ${wants} to help build — toss them to me and I'll place `
+        + `when it's safe.`);
+      for (const block of Object.keys(missing)) neededBlocks.add(block);
+      lastAction = `materials request: ${wants}`;
+    }
     lastGateState = gate.state;
     return true;
   }
@@ -707,6 +733,24 @@ function start(port) {
   function liveTick() {
     liveStatus = readLiveStatus();
     if (liveStatus && liveStatus.session_id) scanSessionId = liveStatus.session_id;
+    // Receipt check for the shortage request: the moment a block the agent asked
+    // for shows up in its inventory, say so — the human should never have to
+    // wonder whether the hand-over worked. Clearing the signature lets the next
+    // (different) shortage be voiced without waiting out the throttle.
+    if (neededBlocks.size && agentState === 'present') {
+      const counts = inventorySnapshot();
+      for (const block of Array.from(neededBlocks)) {
+        if ((counts[block] || 0) > 0) {
+          neededBlocks.delete(block);
+          lastNeedSig = null;
+          if (process.env.MICA_QUIET !== '1') {
+            bot.chat(`Got the ${block} — thanks. I'll place when it's safe.`);
+          }
+          lastAction = `materials received: ${block}`;
+          writeStatus();
+        }
+      }
+    }
     if (liveStatus && liveStatus.built_cells) {
       // Patrol v2: each status write carries a fresh SAMPLE of the built set —
       // accumulate them so the patrol's target set covers the whole build.

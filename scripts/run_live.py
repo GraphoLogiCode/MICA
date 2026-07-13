@@ -12,9 +12,10 @@ recording through the identical live path and prove it matches the offline wrapp
                                                      BOTH model channels (the adapter's inputs)
     python scripts/run_live.py --place               lift the D5 §9 demo pin (amendment
                                                      2026-07-12): the gate may authorize ONE
-                                                     reversible placement per read, licensed by
-                                                     theta_place or the session's DECLARED
-                                                     target; the agent's body executes it.
+                                                     reversible placement per read, licensed
+                                                     by conf >= theta_place ONLY (declaring
+                                                     during a live session is retired by
+                                                     design); the agent's body executes it.
                                                      Off by default — the demo posture stands.
     python scripts/run_live.py --gather              allow the GATHER state (D5 §4 amendment):
                                                      fetch whitelisted materials for a declared
@@ -554,8 +555,9 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
             gather = "--gather" in sys.argv
             # --place lifts the §9 demo pin (amendment 2026-07-12, user decision):
             # the gate may authorize ONE reversible placement per read, licensed by
-            # theta_place or by the session's declared target. Everything else —
-            # no flag, replays, counterfactual — keeps the demo posture.
+            # conf >= theta_place ONLY (the declared route is retired for live
+            # sessions, 2026-07-13 — live behavior comes from inference alone).
+            # Everything else — no flag, replays, counterfactual — stays demo.
             place = "--place" in sys.argv
             gate_runner = LiveGateRunner(f"{base}.gate_trace.jsonl", params,
                                          demo=not place, preload=True,
@@ -563,7 +565,7 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
                                          gather=gather, place=place)
             if place:
                 print("  D5 gate: LIVE — !! PLACEMENT ENABLED !! (§9 amendment: "
-                      "declared-target route, 1 block per read, reversible only; "
+                      "confidence route only, 1 block per read, reversible only; "
                       "say 'stop' in chat to halt the agent)")
             else:
                 print("  D5 gate: LIVE, decoder pre-warmed (demo config — observe/"

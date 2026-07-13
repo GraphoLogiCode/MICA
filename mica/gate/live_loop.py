@@ -11,9 +11,10 @@ Demo authority (D5 §9 pin): PLACE_LOW_RISK is CONFIG-DISABLED by default — th
 posture is observe/suggest/preview only. The §9 amendment (2026-07-12, user decision)
 lifts the pin behind run_live --place: the runner then emits at most ONE placement
 directive per read — the first committed action, only when it is a Place — and the
-BODY executes it (this module still executes nothing; it authorizes). The confidence
-bar may be cleared by theta_place or by the session's DECLARED target (the GATHER
-precedent): the declaration licenses authority, never shapes the proposal.
+BODY executes it (this module still executes nothing; it authorizes). Live placement
+is licensed by conf >= theta_place ONLY: the declared-place route was retired the
+next day (2026-07-13, user decision — live behavior comes from inference alone;
+declarations are post-session labels, never live inputs).
 
 Degradation is a state, not a crash: no decoder on disk, or no correction yet, reads
 as OBSERVE with the reason saying so.
@@ -61,8 +62,13 @@ class LiveGateRunner:
             m_consecutive=meta["thresholds"]["m_consecutive"],
             place_low_risk_enabled=not demo,      # the §9 demo pin
             gather_enabled=gather,                # D5 §4 amendment: off unless asked
-            declared_place_enabled=place))        # §9 amendment 2026-07-12: the human's
-                                                  # declared target may clear the bar
+            # The declared-place route is RETIRED for live sessions (user decision
+            # 2026-07-13: "no declaring in live session" — live behavior must come
+            # from inference alone; declarations are post-session labels). Nothing
+            # arms it: live placement is licensed by conf >= theta_place only. The
+            # FSM mechanism stays defined and unit-tested for a possible future
+            # pre-declared workflow, which would need its own pin.
+            declared_place_enabled=False))
         self.place = place
         self.session_id = session_id              # keys the declared-target lookup
         self.params = params                      # MUST match the live belief's knobs

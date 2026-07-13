@@ -170,6 +170,27 @@ function start(port) {
     return null;
   }
 
+  function nearestDroppedItem(me) {
+    // The closest dropped-item entity within toss range. 1.16 mineflayer names
+    // them 'item' (older builds say objectType 'Item'); WHAT the item is stays
+    // version-fragile metadata, so while a shortage request is outstanding,
+    // anything tossed nearby is worth walking to — the receipt check in liveTick
+    // decides whether it was the right block.
+    let best = null;
+    let bestDistance = 16;
+    for (const id of Object.keys(bot.entities || {})) {
+      const entity = bot.entities[id];
+      if (!entity || !entity.position) continue;
+      if (entity.name !== 'item' && entity.objectType !== 'Item') continue;
+      const distance = me.distanceTo(entity.position);
+      if (distance < bestDistance) {
+        best = entity;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  }
+
   // --- agent status file: the AGENT-side perspective for FlowViz -------------
   // One flushed JSON line per second into the capture folder; FlowViz tails it
   // next to the session logs and renders the agent panel from it. Truncated on
@@ -392,6 +413,30 @@ function start(port) {
       }
       followMode = 'yielding workspace';
       return;
+    }
+    // Receiving posture (user decision 2026-07-13): while a shortage request is
+    // outstanding, a human coming close is most likely BRINGING materials — the
+    // band retreat (and the yield-widened band) fought every hand-over, with the
+    // agent literally fleeing the delivery. So instead: walk to nearby dropped
+    // items (pickup is automatic on contact) and stand still for an approaching
+    // human. The workspace rule above still wins, and the posture ends the
+    // moment the shortage clears (the thank-you in liveTick clears it).
+    if (neededBlocks.size) {
+      const drop = nearestDroppedItem(me);
+      if (drop) {
+        if (now - lastBackoffMs > 750) {
+          setGoal(new goals.GoalNear(drop.position.x, drop.position.y,
+                                     drop.position.z, 1));
+          lastBackoffMs = now;
+        }
+        followMode = 'collecting';
+        return;
+      }
+      if (d < FOLLOW_NEAR + 4) {
+        setGoal(null);
+        followMode = 'receiving';
+        return;
+      }
     }
     // The D5 gate's YIELD widens the personal band for a few seconds: the agent
     // steps further out the moment the gate says the human is too close to its

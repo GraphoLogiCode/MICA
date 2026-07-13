@@ -69,11 +69,23 @@ def test_snapshot_reader_takes_the_newest_fresh_line(tmp_path):
     status.write_text(
         json.dumps({"ts": 1, "inventory": {"dirt": 1}, "material_grants": {}}) + "\n"
         + json.dumps({"ts": 2, "inventory": {"oak_planks": 7},
-                      "material_grants": {"oak_planks": "spruce_planks"}}) + "\n",
+                      "material_grants": {"oak_planks": "spruce_planks"},
+                      "pos": [10.5, 64.0, -3.5]}) + "\n",
         encoding="utf-8")
     snapshot = materials.read_agent_snapshot(str(tmp_path))
-    assert snapshot == ({"oak_planks": 7}, {"oak_planks": "spruce_planks"})
+    # The third element is the agent's own position (D5 §10 Q1 live half), riding
+    # the same file read that serves the materials constraint.
+    assert snapshot == ({"oak_planks": 7}, {"oak_planks": "spruce_planks"},
+                        (10.5, 64.0, -3.5))
     assert materials.read_agent_snapshot(str(tmp_path / "empty")) is None
+
+
+def test_snapshot_reader_without_pos_returns_none_pos(tmp_path):
+    status = tmp_path / "agent-MICA_AI.status.jsonl"
+    status.write_text(
+        json.dumps({"ts": 1, "inventory": {"dirt": 1}, "material_grants": {}}) + "\n",
+        encoding="utf-8")
+    assert materials.read_agent_snapshot(str(tmp_path)) == ({"dirt": 1}, {}, None)
 
 
 @pytest.fixture()

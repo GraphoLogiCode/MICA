@@ -7,9 +7,13 @@ read-offs; it asks the decoder for a proposal, runs the frozen staircase and FSM
 flushes one gate_trace row, and returns the small "gate" block live_status.json
 carries so the embodiment can render the state.
 
-Demo authority (D5 §9 pin): PLACE_LOW_RISK is CONFIG-DISABLED here — the first live
-demo is observe/suggest/preview only. Nothing in this module executes anything;
-rendering is the agent's, authority stays with the human.
+Demo authority (D5 §9 pin): PLACE_LOW_RISK is CONFIG-DISABLED by default — the demo
+posture is observe/suggest/preview only. The §9 amendment (2026-07-12, user decision)
+lifts the pin behind run_live --place: the runner then emits at most ONE placement
+directive per read — the first committed action, only when it is a Place — and the
+BODY executes it (this module still executes nothing; it authorizes). The confidence
+bar may be cleared by theta_place or by the session's DECLARED target (the GATHER
+precedent): the declaration licenses authority, never shapes the proposal.
 
 Degradation is a state, not a crash: no decoder on disk, or no correction yet, reads
 as OBSERVE with the reason saying so.
@@ -25,7 +29,7 @@ from ..capture import session_store
 from ..contracts.b0 import BlockOp, is_agent_actor
 from ..decoder import context as context_builder
 from ..decoder import model as decoder_model
-from ..decoder.grammar import Say
+from ..decoder.grammar import Place, Say
 from ..intent.tracker import predict
 from . import commit, fsm, materials, reversibility
 
@@ -43,7 +47,10 @@ class LiveGateRunner:
 
     def __init__(self, trace_path: str, params, demo: bool = True,
                  preload: bool = False, materials_source=None,
-                 session_id: str | None = None, gather: bool = False):
+                 session_id: str | None = None, gather: bool = False,
+                 place: bool = False):
+        if place:
+            demo = False                          # --place IS the pin lift (§9 amendment)
         with open(_GATE_META, encoding="utf-8") as handle:
             meta = json.load(handle)
         self.staircase = commit.GateThresholds(**meta["thresholds"])
@@ -53,13 +60,28 @@ class LiveGateRunner:
             theta_place=meta["fsm"]["theta_place"],
             m_consecutive=meta["thresholds"]["m_consecutive"],
             place_low_risk_enabled=not demo,      # the §9 demo pin
-            gather_enabled=gather))               # D5 §4 amendment: off unless asked
+            gather_enabled=gather,                # D5 §4 amendment: off unless asked
+            declared_place_enabled=place))        # §9 amendment 2026-07-12: the human's
+                                                  # declared target may clear the bar
+        self.place = place
         self.session_id = session_id              # keys the declared-target lookup
         self.params = params                      # MUST match the live belief's knobs
         self.hysteresis = commit.CommitHysteresis()
         self.model = None
         self.origin: tuple[int, int, int] | None = None
         self.human_cells: set[tuple[int, int, int]] = set()
+        # Cells this session's agent already filled (or was directed to fill). A7
+        # keeps agent placements out of the evidence, so the decoder can re-propose
+        # them forever — this memory is what stops a re-issued directive. Optimistic:
+        # a directive's cell joins the set the read it is issued, so a slow walk to
+        # the spot never triggers a duplicate directive behind it.
+        self.agent_cells: set[tuple[int, int, int]] = set()
+        self.directives = 0                       # placement directives issued (§7 count)
+        # Directive ids must survive a mind restart: the body process outlives a
+        # re-attached run_live and remembers executed ids, so a fresh runner's
+        # counter restarting at 1 must not collide with the previous run's ids
+        # (review 2026-07-13 F2). The start-time token makes each run's ids unique.
+        self._run_token = int(time.time() * 1000)
         self.reads = 0
         self.last_decode_ms: float | None = None   # this read's decoder wall time
         # The materials constraint (D5 §4, 2026-07-06): where the agent's inventory
@@ -91,11 +113,14 @@ class LiveGateRunner:
             self.model.to("cuda" if torch.cuda.is_available() else "cpu")
 
     def ingest_events(self, block_events) -> None:
-        """Track the human-built standing cells (reversibility's world half)."""
+        """Track the human-built standing cells (reversibility's world half), and
+        the agent's own placements (the re-propose guard's ground truth)."""
         for event in block_events:
-            if is_agent_actor(event.actor):
-                continue
             cell = (event.pos.x, event.pos.y, event.pos.z)
+            if is_agent_actor(event.actor):
+                if event.op is BlockOp.PLACE:
+                    self.agent_cells.add(cell)
+                continue
             if event.op is BlockOp.PLACE:
                 self.human_cells.add(cell)
             else:
@@ -113,14 +138,14 @@ class LiveGateRunner:
         except (OSError, ValueError):
             return None
 
-    def _gather_inputs(self, slot, fused, snapshot) -> tuple[bool, bool]:
+    def _gather_inputs(self, slot, fused, snapshot, declared) -> tuple[bool, bool]:
         """(gather_wanted, gather_declared) + the status/trace gather block. The
         target is the DECLARED subtype when one exists, else the belief winner's
         style read; a definitions-only subtype yields no requirements and honestly
         no gather. Player stock comes from the evidence's leak-safe inventory
-        sample; agent stock from its status snapshot."""
+        sample; agent stock from its status snapshot. `declared` arrives from the
+        caller so one gate read does one declared-target lookup."""
         self._gather_block = None
-        declared = self._declared()
         if declared:
             subtype = declared.get("subtype")
         elif slot["top_goal"] and slot["top_goal"] in fused.per_goal:
@@ -148,8 +173,16 @@ class LiveGateRunner:
         proposal = reject = None
         held_k, raw_k, positions, flags, target = 0, 0, [], [], None
         prefix_reversible = None
-        agent_snapshot = self.materials_source()   # one read serves materials + gather
-        gather_wanted, gather_declared = self._gather_inputs(slot, fused, agent_snapshot)
+        # One status-file read serves materials, gather, AND the agent-proximity
+        # veto; one declared-target lookup serves gather AND the place bar.
+        agent_snapshot = self.materials_source()
+        declared = self._declared()
+        gather_wanted, gather_declared = self._gather_inputs(
+            slot, fused, agent_snapshot, declared)
+        # Older test doubles hand back (inventory, grants); the live reader now adds
+        # the agent's position as a third element (D5 §10 Q1 live half).
+        agent_pos = (agent_snapshot[2]
+                     if agent_snapshot is not None and len(agent_snapshot) > 2 else None)
         if decoder_model.available() and self.origin is not None:
             self._ensure_model()
             ctx = context_builder.control_context(fused, self.reads, "arm3", slot,
@@ -169,7 +202,7 @@ class LiveGateRunner:
                 # the first placement the agent has no stock for — a shortage
                 # SHRINKS the build; substitution needs an explicit chat grant.
                 if agent_snapshot is not None:
-                    inventory, grants = agent_snapshot
+                    inventory, grants = agent_snapshot[0], agent_snapshot[1]
                     mat_flags, missing, substituted = materials.feasibility_flags(
                         proposal.actions, inventory, grants)
                     feasible_prefix = (mat_flags.index(True) if any(mat_flags)
@@ -206,7 +239,11 @@ class LiveGateRunner:
             target_cell=target, k_commit=held_k,
             prefix_fully_reversible=prefix_reversible,
             nothing_to_do=reject == decoder_model.NOTHING_TO_DO,
-            gather_wanted=gather_wanted, gather_declared=gather_declared)
+            gather_wanted=gather_wanted, gather_declared=gather_declared,
+            # The agent-proximity veto is part of the place-mode posture (§9
+            # amendment); demo runs stay comparable to their validated traces.
+            agent_pos=agent_pos if self.place else None,
+            place_declared=declared is not None)
         return gate_read, proposal, positions, raw_k, held_k, target
 
     def _materialized(self, belief, status: dict):
@@ -228,7 +265,9 @@ class LiveGateRunner:
                "belief_snapshot_id": status.get("belief_snapshot_id"),
                "K_commit": 0, "idle_state": None,
                "chosen_state": "observe", "candidate_state": "observe",
-               "reason": reason, "committed_actions": []}
+               "reason": reason,
+               "authority": "place" if self.place else "demo",
+               "committed_actions": []}
         self.trace.write(json.dumps(row) + "\n")
         self.trace.flush()
         return {"state": "observe", "reason": reason, "k_commit": 0}
@@ -247,6 +286,31 @@ class LiveGateRunner:
         if proposal is not None and held_k >= 1:
             summary = (f"{held_k} action(s) toward {gate_read.top_goal}, "
                        f"first at {target}")
+        # The placement directive (§9 amendment 2026-07-12): at most ONE block per
+        # read — the first committed action, only when it is a Place, only at a cell
+        # the agent has not already filled. The body executes; this only authorizes.
+        directive = None
+        committed = []
+        why_no_place = None
+        if decision.state.value == "place_low_risk" and proposal is not None and held_k >= 1:
+            first = proposal.actions[0]
+            if not isinstance(first, Place):
+                why_no_place = "first committed action is not a placement (v1 executes Place only)"
+            elif tuple(target) in self.agent_cells:
+                why_no_place = "target already filled by the agent; waiting for new human evidence"
+            else:
+                conf_now = gate_read.p_top * (1 - gate_read.p_z1)
+                route = ("confidence" if conf_now >= self.fsm.config.theta_place
+                         else "declared")
+                block_name = materials.normalize(first.block)
+                self.agent_cells.add(tuple(target))
+                self.directives += 1
+                directive = {"id": f"{self._run_token}-{self.reads}",
+                             "cell": list(target),
+                             "block": block_name, "route": route}
+                committed = [{"action": {"type": "place", "cell": list(target),
+                                         "block": block_name},
+                              "actor": "agent", "reversible": True, "route": route}]
         row = {"tick": fused.tick, "k": self.reads,
                "belief_snapshot_id": status.get("belief_snapshot_id"),
                "inputs_snapshot": {
@@ -266,7 +330,12 @@ class LiveGateRunner:
                "feasible_prefix": (self._materials_block or {}).get("feasible_prefix"),
                "missing": (self._materials_block or {}).get("missing"),
                "gather": self._gather_block,   # schema-additive (D5 §4 amendment)
-               "committed_actions": []}      # demo config: nothing ever executes
+               # The auditor judges each trace by its own recorded authority: demo
+               # traces must show zero placements, place traces at most 1 per read.
+               "authority": "place" if self.place else "demo",
+               "committed_actions": committed}
+        if why_no_place:
+            row["reason"] += f" | no directive: {why_no_place}"
         self.trace.write(json.dumps(row) + "\n")
         self.trace.flush()
         return {"state": decision.state.value, "reason": decision.reason,
@@ -278,7 +347,10 @@ class LiveGateRunner:
                 "materials": self._materials_block,
                 # The agent executes a gather errand ONLY when state == "gather";
                 # the block rides along on other reads so FlowViz can show the plan.
-                "gather": self._gather_block}
+                "gather": self._gather_block,
+                # The body places ONLY while this block is present (and its id is
+                # new); every other read carries no directive at all.
+                "place": directive}
 
     def close(self) -> None:
         self.trace.close()
@@ -291,7 +363,8 @@ class LiveGateRunner:
                 base = os.path.splitext(self.trace_path)[0]
             report_path = base + ".materials_report.json"
             with open(report_path, "w", encoding="utf-8") as handle:
-                json.dump(self.account.report(committed_places=0), handle, indent=2)
+                json.dump(self.account.report(committed_places=self.directives),
+                          handle, indent=2)
             print(f"  materials report -> {os.path.basename(report_path)}")
 
 

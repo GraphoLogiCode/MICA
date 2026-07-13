@@ -83,10 +83,12 @@ def propose_substitute(block: str, inventory: dict, grants: dict,
     return None
 
 
-def read_agent_snapshot(directory: str) -> tuple[dict, dict] | None:
-    """The newest agent status line's (inventory, material_grants) — or None when
-    no agent is writing (no file, unreadable, or stale). None means the materials
-    constraint stays inactive, which is exactly right for replays and tests."""
+def read_agent_snapshot(directory: str) -> tuple[dict, dict, tuple | None] | None:
+    """The newest agent status line's (inventory, material_grants, agent position)
+    — or None when no agent is writing (no file, unreadable, or stale). None means
+    the materials constraint stays inactive, which is exactly right for replays and
+    tests. The position rides along (D5 §10 Q1 live half) so one file read per gate
+    read serves both the materials constraint and the agent-proximity veto."""
     candidates = glob.glob(os.path.join(directory, "agent-*.status.jsonl"))
     newest, newest_mtime = None, -1.0
     for path in candidates:
@@ -106,7 +108,8 @@ def read_agent_snapshot(directory: str) -> tuple[dict, dict] | None:
         for line in reversed(lines):
             row = json.loads(line)
             if "inventory" in row:
-                return (row.get("inventory") or {}, row.get("material_grants") or {})
+                pos = tuple(row["pos"]) if row.get("pos") else None
+                return (row.get("inventory") or {}, row.get("material_grants") or {}, pos)
         return None                      # an agent from before the inventory field
     except (OSError, ValueError):
         return None

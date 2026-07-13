@@ -16,11 +16,17 @@ What it checks, in plain terms:
 
   parse      every line is valid JSON with the fields a trace row must have
   order      read numbers count 1, 2, 3, ... and game ticks never go backwards
-  states     only the five allowed states appear; EXECUTE_CHUNK is banned outright;
-             PLACE_LOW_RISK is banned under the demo config (pass --allow-place
-             only for counterfactual artifacts, where placing is simulated)
-  commits    committed_actions stays empty under the demo config, and if anything
-             ever committed, no position ever fired below its own threshold
+  states     only the allowed states appear; EXECUTE_CHUNK is banned outright;
+             PLACE_LOW_RISK is banned under the demo config (each trace declares
+             its own config in the `authority` field — rows without one are demo;
+             --allow-place remains for counterfactual artifacts, where placing
+             is simulated)
+  commits    committed_actions stays empty under the demo config; under the place
+             config (§9 amendment 2026-07-12) each row commits at most ONE action,
+             only in the place_low_risk state, always reversible, always traceable,
+             and its licensing route holds up: "confidence" re-checks the row's own
+             discounted conf against theta_place, "declared" re-checks that the
+             session really has an entry in declared_targets.json
   snapshot   every full read carries the belief snapshot id that explains it, and
              (when the session's belief log is on disk) that id really is a
              correction tick in that log
@@ -59,7 +65,7 @@ _EPS = 2e-3
 # exactly 4.0 may truly have been 4.004, just outside the veto radius.
 _EPS_PROX = 0.005
 
-_LIVE_STATES = {"observe", "suggest", "preview", "place_low_risk", "yield"}
+_LIVE_STATES = {"observe", "suggest", "preview", "place_low_risk", "gather", "yield"}
 
 
 class TraceAudit:
@@ -108,6 +114,25 @@ def _correction_ticks(trace_path: str) -> set[int] | None:
             if row.get("kind") == "correction" and row.get("tick") is not None:
                 ticks.add(int(row["tick"]))
     return ticks or None
+
+
+def _session_declared(trace_path: str) -> bool | None:
+    """Whether this trace's session has a declared target on record: True/False
+    when declared_targets.json is on disk, None when there is nothing to check
+    against (the declared-route commit check warns instead of failing then)."""
+    store = os.path.join(_ROOT, "capture", "raw", "declared_targets.json")
+    if not os.path.exists(store):
+        return None
+    marker = ".gate_trace"
+    name = os.path.basename(trace_path)
+    if marker not in name:
+        return None
+    session = name[: name.index(marker)]
+    try:
+        with open(store, encoding="utf-8") as handle:
+            return session in json.load(handle)
+    except (OSError, ValueError):
+        return None
 
 
 def _segments(rows: list[dict]) -> list[list[dict]]:
@@ -177,7 +202,8 @@ def _trace_thetas(rows: list[dict], meta: dict) -> tuple[float, float, bool]:
 
 
 def _check_states_and_commits(audit: TraceAudit, rows: list[dict],
-                              allow_place: bool) -> None:
+                              allow_place: bool, theta_place: float,
+                              declared_ok: bool | None) -> None:
     for row in rows:
         k = row.get("k")
         state = row.get("chosen_state")
@@ -187,17 +213,45 @@ def _check_states_and_commits(audit: TraceAudit, rows: list[dict],
         if state == "place_low_risk" and not allow_place:
             audit.fail(k, "PLACE_LOW_RISK under the demo config -- the S9 pin failed")
         if row.get("committed_actions"):
-            # Nothing may commit in the demo config at all; and if a trace from a
-            # placing config is audited, every committed action must be reversible
-            # and traceable to the belief that caused it (D5 §7 pass criteria).
+            # Nothing may commit in the demo config at all; under the place config
+            # (§9 amendment) a row commits at most ONE action, only in the placing
+            # state, always reversible and traceable, with a route that holds up.
             if not allow_place:
                 audit.fail(k, "committed_actions is non-empty under the demo config")
+            if len(row["committed_actions"]) > 1:
+                audit.fail(k, f"{len(row['committed_actions'])} committed actions "
+                           "in one read (the §9 amendment allows one block per read)")
+            if state != "place_low_risk":
+                audit.fail(k, f"committed actions in state {state!r} "
+                           "(only place_low_risk may commit)")
             if row.get("belief_snapshot_id") is None:
                 audit.fail(k, "committed actions with no belief_snapshot_id "
                            "(untraceable commit)")
             for action in row["committed_actions"]:
                 if not action.get("reversible", False):
                     audit.fail(k, "an irreversible action was committed (v1 bans this)")
+                route = action.get("route")
+                if not allow_place:
+                    continue                 # already failed above; skip route noise
+                if route == "confidence":
+                    snap = row.get("inputs_snapshot") or {}
+                    conf = snap.get("p_top_goal", 0.0) * (1.0 - snap.get("p_z1", 0.0))
+                    margin = conf - theta_place
+                    if margin < -_EPS:
+                        audit.fail(k, f"confidence-route commit with conf {conf:.4f} "
+                                   f"below theta_place {theta_place}")
+                    elif margin < _EPS:
+                        audit.warn(k, "confidence-route commit sits on theta_place "
+                                   "(rounding band)")
+                elif route == "declared":
+                    if declared_ok is False:
+                        audit.fail(k, "declared-route commit but the session has no "
+                                   "entry in declared_targets.json")
+                    elif declared_ok is None:
+                        audit.warn(k, "declared-route commit; no declared_targets.json "
+                                   "on disk to verify against")
+                else:
+                    audit.fail(k, f"committed action with unknown route {route!r}")
         if "placement disabled by config" in (row.get("reason") or ""):
             audit.disabled_placements += 1
 
@@ -302,6 +356,11 @@ def _expected_candidate(row: dict, fsm_cfg: dict) -> tuple[str | None, str | Non
     k_commit = row.get("K_commit", 0)
     if "decoder proposes nothing" in reason:
         return "observe", None
+    # The GATHER branch sits between the vetoes and the suggest split (D5 §4
+    # amendment). Its inputs (the materials shortfall) are not in the snapshot,
+    # so the reason string is the only visible witness — accept it as-is.
+    if "materials missing" in reason:
+        return "gather", None
     suggest_split = k_commit == 0 or "theta_suggest" in reason
     if suggest_split:
         margin = conf - fsm_cfg["theta_suggest"]
@@ -310,6 +369,12 @@ def _expected_candidate(row: dict, fsm_cfg: dict) -> tuple[str | None, str | Non
         return ("suggest" if margin > 0 else "observe"), None
     if snap.get("reversibility") is not True:
         return "preview", None
+    # The declared route (§9 amendment 2026-07-12): the human's declared target
+    # clears the place bar without theta_place. Visible through the reason; the
+    # commit-level check separately verifies the declaration really exists.
+    if "DECLARED target" in reason:
+        return ("place_low_risk" if fsm_cfg.get("place_low_risk_enabled")
+                else "preview"), None
     margin = conf - fsm_cfg["theta_place"]
     if abs(margin) <= _EPS:
         return None, "confidence sits on the place threshold (rounding band)"
@@ -367,6 +432,7 @@ def audit_trace(path: str, meta: dict, allow_place: bool) -> TraceAudit:
     # also have dropped moments the offline evidence kept).
     is_replay = ".replay." in os.path.basename(path)
     corrections = None if is_replay else _correction_ticks(path)
+    declared_ok = _session_declared(path)
 
     pooled = "session" in rows[0]
     segments = _segments(rows)
@@ -381,12 +447,17 @@ def audit_trace(path: str, meta: dict, allow_place: bool) -> TraceAudit:
                        f"written under superseded thresholds (suggest {theta_suggest}, "
                        f"place {theta_place}) -- judged by its own config, but the "
                        "artifact is stale against models/gate_v1.json")
+        # Each segment declares its own authority (§9 amendment): rows written
+        # before the field exist are demo by definition. --allow-place still
+        # overrides for counterfactual artifacts, where placing is simulated.
+        segment_place = allow_place or segment[0].get("authority") == "place"
         fsm_cfg = dict(meta["fsm"])
         fsm_cfg["theta_suggest"] = theta_suggest
         fsm_cfg["theta_place"] = theta_place
-        fsm_cfg["place_low_risk_enabled"] = allow_place
+        fsm_cfg["place_low_risk_enabled"] = segment_place
         _check_row_order(audit, segment, pooled)
-        _check_states_and_commits(audit, segment, allow_place)
+        _check_states_and_commits(audit, segment, segment_place, theta_place,
+                                  declared_ok)
         _check_snapshots(audit, segment, corrections)
         _check_staircase(audit, segment, meta["thresholds"]["c_min"])
         _check_fsm(audit, segment, fsm_cfg, meta["thresholds"]["m_consecutive"])

@@ -7,11 +7,17 @@ session ends; this window just makes the label a click instead of a terminal com
 
 ## Run
 
+Double-click **`label-tool.bat`** (or run it from a terminal). It pins the rig's
+Python 3.12 — this machine's `py` launcher defaults to 3.14, which lacks the
+pipeline's packages (torch/timm/gym3), so opening `gui.py` with the wrong Python
+shows the "Wrong Python" warning at startup and every evidence/label job fails.
+
 ```
-python after_session_tool/gui.py
+after_session_tool\label-tool.bat        # the right way (double-clickable)
+py -3.12 after_session_tool/gui.py       # equivalent, by hand
 ```
 
-Stdlib only — Tkinter ships with Python, so there are no dependencies. It reads the
+The GUI itself is stdlib only — Tkinter ships with Python. It reads the
 pipeline's files and, on a label, shells out to `scripts/after_game.py` (the
 canonical path); it never re-derives pipeline facts. All loading runs in a
 background thread as one pass over the files, so the window never freezes on a

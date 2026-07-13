@@ -72,6 +72,26 @@ REJECTED — it would void the D5 §4 scarcity pin and the D7 sufficiency/gather
 layer; the dated note lives in D5 §4. Runbook step 6 below becomes: hand it the
 build's block, or just wait for it to ask.
 
+**Addendum 2 (2026-07-13 evening, session 165730 — 510 reads, the closest miss
+yet):** conf peaked **0.916**, K reached 3, materials FEASIBLE on ~120 reads (the
+shortage request + hand-over worked), PLACE_LOW_RISK was the candidate on 9 reads —
+and STILL zero commits, because no candidate survived M=3 consecutive reads: the
+human hovered near the agent/target all session (120 YIELD + 189 human-active
+reads), and every approach drops the lattice instantly while re-earning takes 3
+clean seconds. Two fixes shipped, one lesson stands:
+- **Receiving posture** (agent.js): while a shortage request is outstanding, the
+  agent walks to nearby dropped items and stands still for an approaching human
+  instead of backing away — the band retreat had made hand-overs physically
+  impossible (it fled every delivery). Workspace rule still wins; posture ends
+  when the shortage clears. Dated note in D5 §4.
+- **NOT a heads problem — no cascade**: conf 0.916 live is far past anything
+  validation ever showed; retraining now would also repeat the rejected 07-10
+  cascade's mistake (readiness still shows 0 new agreed captures).
+- **The lesson for the demo**: declare the target in the tool (the declared route
+  makes PLACE the candidate on every safe K≥1 read instead of only conf≥0.4 ones)
+  and give the agent a real window — walk 4+ blocks away and stand still for ~5
+  seconds. Shepherding it resets authority every time.
+
 **Still open before the first placement session:**
 - [ ] **P-1 — auditor B0 cross-check (review F4)**: committed directives vs the
   session's actual MICA_AI place events, both directions. Required before any

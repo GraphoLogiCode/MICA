@@ -715,7 +715,33 @@ class App:
         self.root.after(700, self._poll_jobs)
 
 
+def _reexec_into_pipeline_python() -> bool:
+    """Self-healing launch: a window opened with a python that cannot run the
+    pipeline (this machine's py-launcher default is a bare 3.14) relaunches
+    itself with the rig's python instead of trusting a warning box to change
+    habits — the same evening saw three wrong-python windows in a row. Returns
+    True when a replacement window was started (the caller exits quietly).
+    MICA_TOOL_REEXEC stops a broken second hop from looping forever; the
+    _check_interpreter warning still fires inside that hop as the last resort."""
+    import importlib.util
+    import subprocess
+    if os.environ.get("MICA_TOOL_REEXEC") == "1":
+        return False
+    missing = [name for name in ("torch", "timm", "gym3")
+               if importlib.util.find_spec(name) is None]
+    if not missing:
+        return False
+    env = dict(os.environ, MICA_TOOL_REEXEC="1")
+    try:
+        subprocess.Popen(["py", "-3.12", os.path.abspath(__file__)], env=env)
+        return True
+    except OSError:
+        return False                # no py launcher: fall through to the warning
+
+
 def main() -> int:
+    if _reexec_into_pipeline_python():
+        return 0
     root = tk.Tk()
     App(root)
     root.mainloop()

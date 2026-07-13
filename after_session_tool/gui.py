@@ -114,8 +114,12 @@ class App:
         # machine with several pythons (a fresh 3.14 became the `py` default and
         # broke evidence jobs with "No module named timm") makes that a silent
         # trap — so say it loudly at startup instead of failing one job at a time.
+        # The canary list must name EVERY heavy dep the evidence chain imports:
+        # a partially-installed python passes a short list and still fails the
+        # job (3.14 had torch+timm but not gym3, VPT's dep — 2026-07-13).
         import importlib.util
-        missing = [name for name in ("torch", "timm") if importlib.util.find_spec(name) is None]
+        missing = [name for name in ("torch", "timm", "gym3")
+                   if importlib.util.find_spec(name) is None]
         if missing:
             messagebox.showwarning(
                 "Wrong Python for the pipeline",

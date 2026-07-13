@@ -23,6 +23,7 @@ pinned thresholds — regenerable by rerunning this command.
 """
 from __future__ import annotations
 
+import dataclasses
 import glob
 import json
 import os
@@ -130,6 +131,40 @@ def _label_real() -> list[dict]:
             # A contested label must never become training pairs — the builder's
             # word outranks the matcher, and the VLM cross-check arbitrates below.
             entry["pairs_withheld"] = "matcher contests the builder's label"
+            if "--contested-pairs" in sys.argv:
+                # The pre-registered comparison experiment (2026-07-12 note): write
+                # this session's pairs anyway, stamped with the BUILDER's label (their
+                # word as truth — the hypothesis under test), to a suffix the
+                # production training glob can never match. Score/margin keep the
+                # matcher's read as provenance of how contested the session was.
+                # A structure-QUARANTINED session is skipped with its reason: its
+                # evidence is not proof-grade, and the honesty rails outrank the
+                # experiment (found 2026-07-12 — the recovery session 210003's b2
+                # cannot be regenerated; it fails the replay check).
+                quarantined = False
+                try:
+                    report_path = os.path.join(os.path.dirname(jsonl), "session_report.json")
+                    with open(report_path, encoding="utf-8") as handle:
+                        quarantined = bool(json.load(handle).get("structure_quarantined"))
+                except (OSError, ValueError):
+                    pass
+                if quarantined:
+                    entry["contested_pairs_skipped"] = ("structure quarantined — evidence "
+                                                        "not proof-grade, no pairs")
+                    print(f"  contested pairs SKIPPED for {session_id}: structure quarantined")
+                else:
+                    builder_label = dataclasses.replace(
+                        label, goal=human.get("goal"), subtype=human.get("subtype", ""))
+                    try:
+                        entry["contested_pairs"] = _write_pairs(
+                            os.path.dirname(jsonl), session_id, builder_label,
+                            session=session, region=region, base=base,
+                            suffix=".source_b_contested.jsonl")
+                    except ValueError as error:
+                        # Inconsistent banked evidence must not kill every OTHER
+                        # session's pairs — record it loudly and move on.
+                        entry["contested_pairs_skipped"] = f"inconsistent evidence: {error}"
+                        print(f"  contested pairs SKIPPED for {session_id}: {error}")
         elif label.kept:
             entry["pairs"] = _write_pairs(os.path.dirname(jsonl), session_id, label,
                                           session=session, region=region, base=base)
@@ -142,9 +177,12 @@ def _label_real() -> list[dict]:
 
 
 def _write_pairs(evidence_dir: str, session_id: str, label,
-                 session=None, region=None, base=None) -> int:
+                 session=None, region=None, base=None,
+                 suffix: str = ".source_b.jsonl") -> int:
     """Pairs from the banked evidence files when they exist; recomputed through the
-    same streams otherwise (symbolic channels only — no h3d without its flag)."""
+    same streams otherwise (symbolic channels only — no h3d without its flag).
+    `suffix` defaults to the production pairs file; the contested-comparison
+    experiment writes to its own suffix so the default glob never sees it."""
     b1_path = os.path.join(evidence_dir, f"{session_id}.evidence2d.jsonl")
     b2_path = os.path.join(evidence_dir, f"{session_id}.evidence3d.jsonl")
     if os.path.exists(b1_path) and os.path.exists(b2_path):
@@ -159,7 +197,7 @@ def _write_pairs(evidence_dir: str, session_id: str, label,
         b1 = [evidence2d_to_dict(r) for r in records]
         b2 = [evidence3d_to_dict(r) for r in b2_records]
     pairs = build_pairs(b1, b2, label, session_id)
-    out = os.path.join(evidence_dir, f"{session_id}.source_b.jsonl")
+    out = os.path.join(evidence_dir, f"{session_id}{suffix}")
     with open(out, "w", encoding="utf-8") as handle:
         for pair in pairs:
             handle.write(json.dumps(pair) + "\n")
@@ -195,8 +233,13 @@ def _sample_pairs(results: list[dict]) -> list[dict]:
     for entry in results:
         if not entry.get("pairs"):
             continue
-        directory = _SCRIPTED if entry["kind"] == "scripted" else None
-        path = os.path.join(directory or _RAW, f"{entry['session']}.source_b.jsonl")
+        # Scripted pairs sit flat in the corpus dir; a real session's pairs live in
+        # its dated dir — the bare _RAW join found nothing there, which silently
+        # left every real session out of this report section.
+        if entry["kind"] == "scripted":
+            path = os.path.join(_SCRIPTED, f"{entry['session']}.source_b.jsonl")
+        else:
+            path = session_store.session_file(entry["session"], ".source_b.jsonl")
         if not os.path.exists(path):
             continue
         for line in open(path, encoding="utf-8"):

@@ -68,8 +68,9 @@ def test_b5_rejects_mismatched_lengths_and_bad_ranges():
 
 def test_b6_schema_carries_the_pinned_states_and_features():
     states = {s.value for s in GateState}
+    # "gather" joined 2026-07-10 (the D5 §4 amendment) — config-disabled by default
     assert states == {"observe", "suggest", "preview", "place_low_risk",
-                      "execute_chunk", "yield"}
+                      "gather", "execute_chunk", "yield"}
     decision = GateDecision(
         state=GateState.OBSERVE,
         inputs_snapshot=InputsSnapshot(top_goal="defense", p_top_goal=0.4,

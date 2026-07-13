@@ -34,7 +34,7 @@ import os
 import random
 
 from ..contracts.b1 import GOALS
-from ..contracts.goals import TAXONOMY
+from ..contracts.goals import PHRASES, TAXONOMY
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _CKPT = os.path.join(_ROOT, "models", "uni3d-b.pt")
@@ -172,7 +172,10 @@ class Uni3DShapeHead:
 
 def prompt_texts() -> dict[str, list[str]]:
     """The taxonomy prompts the text cache is built from — one list per category,
-    subtype phrasings pooled, mirroring the MineCLIP head's ensembling."""
+    subtype phrasings pooled, mirroring the MineCLIP head's ensembling. Snake_case
+    v3 subtype names become readable phrases via PHRASES ("a smelting_processing"
+    would be a nonsense prompt)."""
     templates = ("a {s}", "a minecraft {s}", "a voxel model of a {s}", "a blocky {s}")
-    return {goal: [t.format(s=subtype) for subtype in TAXONOMY[goal] for t in templates]
+    return {goal: [t.format(s=PHRASES[subtype]) for subtype in TAXONOMY[goal]
+                   for t in templates]
             for goal in GOALS}

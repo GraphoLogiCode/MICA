@@ -43,7 +43,7 @@ def test_prompts_cover_every_category_via_its_subtypes():
     prompts = prompt_texts()
     assert set(prompts) == set(GOALS)
     assert all(len(texts) >= 8 for texts in prompts.values())
-    assert any("treehouse" in t for t in prompts["habitation"])
+    assert any("starter shelter" in t for t in prompts["habitation"])   # v3 phrase, not snake_case
 
 
 def test_fps_shim_matches_brute_force_reference():

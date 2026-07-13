@@ -128,6 +128,12 @@ class ClientObservation:
     held_item: str | None
     hotbar: tuple[str, ...] | None
     gui_open: bool | None
+    # The player's whole inventory as (item, count) pairs, aggregated over main +
+    # hotbar + offhand slots. Sampled sparsely (the mod writes it ~once a second and
+    # when it changes), so most ticks carry None — and every capture from before
+    # 2026-07-10 carries None on all of them. Consumers treat it exactly like the
+    # pixel channels: optional, absent-tolerant.
+    inventory: tuple[tuple[str, int], ...] | None = None
 
 
 @dataclass(frozen=True)

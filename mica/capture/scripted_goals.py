@@ -35,8 +35,7 @@ from dataclasses import dataclass
 from random import Random
 
 from ..contracts.b0 import BlockOp, BlockPos
-from ..contracts.goals import TAXONOMY
-from ..perception.templates import REQ_SOLID, instance, rotate_offset
+from ..perception.templates import REQ_SOLID, TEMPLATES, instance, rotate_offset
 from .motion import DELIBERATE_GAZE, SHORTCUT_GAZE
 from .synthetic import ScriptedBuild, ScriptedPlacement
 
@@ -52,7 +51,7 @@ class BuildPlan:
     """Everything that makes one scripted session the particular session it is."""
 
     goal: str
-    subtype: str                 # which style of the goal gets built
+    subtype: str                 # the template INSTANCE name that gets built (e.g. "cabin")
     seed: int
     mode: str                    # "deliberate" | "shortcut"
     origin: tuple[int, int]      # (x, z) world offset of the template's local origin
@@ -67,13 +66,16 @@ class BuildPlan:
 def plan_variants(goal: str, count: int, seed: int) -> list[BuildPlan]:
     """Deterministic spread of plans for one goal — same seed, same corpus, always."""
     rng = Random((goal, seed).__repr__())
-    subtypes = TAXONOMY[goal]
+    # The generator can only build what a template describes, so plans iterate the
+    # goal's INSTANCES (by name) — the taxonomy's definitions-only subtypes have no
+    # shape to script. The label still carries the instance's v3 subtype (below).
+    styles = [template.name for template in TEMPLATES[goal]]
     plans = []
     for index in range(count):
         shortcut = index % 3 == 2   # every third session is the hasty kind
         plans.append(BuildPlan(
             goal=goal,
-            subtype=subtypes[index % len(subtypes)],   # styles alternate deterministically
+            subtype=styles[index % len(styles)],       # styles alternate deterministically
             seed=seed * 1000 + index,
             mode="shortcut" if shortcut else "deliberate",
             origin=(rng.randint(-12, 12), rng.randint(-12, 12)),
@@ -157,7 +159,11 @@ def build_from_plan(plan: BuildPlan) -> tuple[ScriptedBuild, dict]:
         motion=DELIBERATE_GAZE if plan.mode == "deliberate" else SHORTCUT_GAZE,
     )
     label = {
-        "goal": plan.goal, "subtype": plan.subtype, "mode": plan.mode,
+        # The label's subtype is the taxonomy-v3 style the matcher will read back
+        # ("house"); the instance that was actually scripted ("cabin") rides along
+        # for the diversity report and the session id.
+        "goal": plan.goal, "subtype": instance(plan.subtype).subtype, "mode": plan.mode,
+        "style_instance": plan.subtype,
         "origin": list(plan.origin), "rotation": plan.rotation, "order": plan.order,
         "completion": plan.completion, "mistake_rate": plan.mistake_rate,
         "block": plan.block, "seed": plan.seed, "events": len(placements),

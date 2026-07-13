@@ -38,7 +38,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 from mica.capture import session_store                       # noqa: E402
-from mica.contracts.b3 import fuse_dicts                     # noqa: E402
+from mica.contracts.b3 import fuse_dicts, fuse_streams                     # noqa: E402
 from mica.intent.heads_v0 import likelihood, strip_behavior, strip_structure  # noqa: E402
 from mica.intent.tracker import (                            # noqa: E402
     TrackerParams, category_marginal, correct, mode_marginal, predict, uniform_belief,
@@ -48,21 +48,38 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CORPUS = os.path.join(_ROOT, "capture", "scripted")
 _RAW = os.path.join(_ROOT, "capture", "raw")
 
-# Structure evidence quarantined (two F9 capture pauses dropped ~130 placements) —
-# its replayed world is missing half the build, so no belief run can be scored on it.
+# Belt-and-suspenders quarantine pin: the PRIMARY exclusion mechanism is each
+# session's own report (structure_quarantined, read below, added 2026-07-12) —
+# this set only guards sessions whose report was lost, so a deleted file can
+# never silently re-admit known-bad evidence. (210003: capture pauses dropped
+# ~130 placements; its replayed world fails the proof check permanently.)
 _QUARANTINED = {"fabric-20260704-210003"}
+
+
+def _report_quarantined(session_id: str) -> bool:
+    """The session's own report says its structure evidence is quarantined."""
+    path = os.path.join(session_store.session_dir(session_id), "session_report.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return bool(json.load(handle).get("structure_quarantined"))
+    except (OSError, ValueError):
+        return False
 
 
 def real_labeled_sessions() -> dict[str, dict]:
     """The labeled real captures a belief run may score: every labels.json entry whose
-    banked evidence files exist, minus the quarantined one. Truth is the BUILDER's own
+    banked evidence files exist, minus quarantined ones. Truth is the BUILDER's own
     category — matcher-contested sessions stay in (the builder's word outranks the
-    matcher; the contest rule governs training pairs, not evaluation truth)."""
+    matcher; the contest rule governs training pairs, not evaluation truth).
+
+    Quarantine is read from each session's OWN report — a newly quarantined session
+    leaves every eval the moment its report says so, no constant to edit."""
     with open(os.path.join(_RAW, "labels.json"), encoding="utf-8") as handle:
         labels = json.load(handle)
     sessions = {}
     for session_id, label in labels.items():
-        if session_id in _QUARANTINED:
+        if session_id in _QUARANTINED or _report_quarantined(session_id):
+            print(f"  excluded (structure quarantined): {session_id}")
             continue
         b1 = session_store.session_file(session_id, ".evidence2d.jsonl")
         b2 = session_store.session_file(session_id, ".evidence3d.jsonl")
@@ -180,8 +197,7 @@ def main() -> int:
               open(os.path.join(directory, f"{session_id}.evidence2d.jsonl"), encoding="utf-8")]
         b2 = [json.loads(line) for line in
               open(os.path.join(directory, f"{session_id}.evidence3d.jsonl"), encoding="utf-8")]
-        scored = [r for r in b1 if r["scored"]]
-        fused = [fuse_dicts(a, b) for a, b in zip(scored, b2)]   # the handoff, verified per record
+        fused = fuse_streams(b1, b2, session_id)   # the handoff: counts asserted, verified per record
 
         trace: list | None = [] if "--trace" in sys.argv else None
         floor_calls = [max(f.per_goal, key=lambda g: (f.per_goal[g].fit, f.per_goal[g].comp))

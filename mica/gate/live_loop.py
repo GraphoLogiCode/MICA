@@ -20,6 +20,8 @@ import json
 import os
 import time
 
+from ..assist import sufficiency as assist
+from ..capture import session_store
 from ..contracts.b0 import BlockOp, is_agent_actor
 from ..decoder import context as context_builder
 from ..decoder import model as decoder_model
@@ -40,7 +42,8 @@ class LiveGateRunner:
     """Feed me events as they arrive and call read() once per display tick."""
 
     def __init__(self, trace_path: str, params, demo: bool = True,
-                 preload: bool = False, materials_source=None):
+                 preload: bool = False, materials_source=None,
+                 session_id: str | None = None, gather: bool = False):
         with open(_GATE_META, encoding="utf-8") as handle:
             meta = json.load(handle)
         self.staircase = commit.GateThresholds(**meta["thresholds"])
@@ -49,7 +52,9 @@ class LiveGateRunner:
             theta_suggest=meta["fsm"]["theta_suggest"],
             theta_place=meta["fsm"]["theta_place"],
             m_consecutive=meta["thresholds"]["m_consecutive"],
-            place_low_risk_enabled=not demo))     # the §9 demo pin
+            place_low_risk_enabled=not demo,      # the §9 demo pin
+            gather_enabled=gather))               # D5 §4 amendment: off unless asked
+        self.session_id = session_id              # keys the declared-target lookup
         self.params = params                      # MUST match the live belief's knobs
         self.hysteresis = commit.CommitHysteresis()
         self.model = None
@@ -66,6 +71,7 @@ class LiveGateRunner:
             os.path.dirname(os.path.abspath(trace_path))))
         self.account = materials.MaterialsAccount()
         self._materials_block: dict | None = None
+        self._gather_block: dict | None = None
         # One runner, one trace file, from the top. Append mode here once let a
         # re-attached run stack its rows under a previous run's (run_live now
         # banks the older files aside, and a repeated replay starts over).
@@ -95,6 +101,43 @@ class LiveGateRunner:
             else:
                 self.human_cells.discard(cell)
 
+    def _declared(self) -> dict | None:
+        """The session's declared build target, if the human recorded one — read
+        from its OWN store (never labels.json), per the D7 quarantine."""
+        if self.session_id is None:
+            return None
+        try:
+            path = os.path.join(session_store.RAW_ROOT, "declared_targets.json")
+            with open(path, encoding="utf-8") as handle:
+                return json.load(handle).get(self.session_id)
+        except (OSError, ValueError):
+            return None
+
+    def _gather_inputs(self, slot, fused, snapshot) -> tuple[bool, bool]:
+        """(gather_wanted, gather_declared) + the status/trace gather block. The
+        target is the DECLARED subtype when one exists, else the belief winner's
+        style read; a definitions-only subtype yields no requirements and honestly
+        no gather. Player stock comes from the evidence's leak-safe inventory
+        sample; agent stock from its status snapshot."""
+        self._gather_block = None
+        declared = self._declared()
+        if declared:
+            subtype = declared.get("subtype")
+        elif slot["top_goal"] and slot["top_goal"] in fused.per_goal:
+            subtype = fused.per_goal[slot["top_goal"]].subtype
+        else:
+            return False, False
+        result = assist.sufficiency(assist.template_requirements(subtype),
+                                    fused.state_feats.inventory,
+                                    snapshot[0] if snapshot else None)
+        if not result or not result["missing"]:
+            return False, False
+        self._gather_block = {"target": subtype, "declared": declared is not None,
+                              "missing": result["missing"],
+                              "plan": result["gather_next"],
+                              "can_help": result["can_help"]}
+        return True, declared is not None
+
     def _decide(self, belief, fused, status):
         """(gate_read, proposal, flags, positions, raw_k, held_k) for one tick."""
         self.last_decode_ms = None             # None until this read actually decodes
@@ -105,6 +148,8 @@ class LiveGateRunner:
         proposal = reject = None
         held_k, raw_k, positions, flags, target = 0, 0, [], [], None
         prefix_reversible = None
+        agent_snapshot = self.materials_source()   # one read serves materials + gather
+        gather_wanted, gather_declared = self._gather_inputs(slot, fused, agent_snapshot)
         if decoder_model.available() and self.origin is not None:
             self._ensure_model()
             ctx = context_builder.control_context(fused, self.reads, "arm3", slot,
@@ -123,9 +168,8 @@ class LiveGateRunner:
                 # The materials constraint (D5 §4): the prefix may not extend past
                 # the first placement the agent has no stock for — a shortage
                 # SHRINKS the build; substitution needs an explicit chat grant.
-                snapshot = self.materials_source()
-                if snapshot is not None:
-                    inventory, grants = snapshot
+                if agent_snapshot is not None:
+                    inventory, grants = agent_snapshot
                     mat_flags, missing, substituted = materials.feasibility_flags(
                         proposal.actions, inventory, grants)
                     feasible_prefix = (mat_flags.index(True) if any(mat_flags)
@@ -161,7 +205,8 @@ class LiveGateRunner:
             focus_block=tuple(status["focus_block"]) if status.get("focus_block") else None,
             target_cell=target, k_commit=held_k,
             prefix_fully_reversible=prefix_reversible,
-            nothing_to_do=reject == decoder_model.NOTHING_TO_DO)
+            nothing_to_do=reject == decoder_model.NOTHING_TO_DO,
+            gather_wanted=gather_wanted, gather_declared=gather_declared)
         return gate_read, proposal, positions, raw_k, held_k, target
 
     def _materialized(self, belief, status: dict):
@@ -220,6 +265,7 @@ class LiveGateRunner:
                              if self.last_decode_ms is not None else None),
                "feasible_prefix": (self._materials_block or {}).get("feasible_prefix"),
                "missing": (self._materials_block or {}).get("missing"),
+               "gather": self._gather_block,   # schema-additive (D5 §4 amendment)
                "committed_actions": []}      # demo config: nothing ever executes
         self.trace.write(json.dumps(row) + "\n")
         self.trace.flush()
@@ -229,7 +275,10 @@ class LiveGateRunner:
                 "p_star": round(gate_read.p_top, 4),
                 "target_cell": list(target) if target else None,
                 "proposal_summary": summary,
-                "materials": self._materials_block}
+                "materials": self._materials_block,
+                # The agent executes a gather errand ONLY when state == "gather";
+                # the block rides along on other reads so FlowViz can show the plan.
+                "gather": self._gather_block}
 
     def close(self) -> None:
         self.trace.close()
@@ -251,7 +300,7 @@ def replay_gate(jsonl_path: str) -> int:
     evidence, one read per correction, and show the state mix. Writes
     <session>.gate_trace.replay.jsonl — never the live trace's name."""
     from ..capture.jsonl_ingest import JsonlSource
-    from ..contracts.b3 import fuse_dicts
+    from ..contracts.b3 import fuse_streams
     from ..data import decoder_corpus
     from ..intent import heads_v1
 
@@ -260,8 +309,7 @@ def replay_gate(jsonl_path: str) -> int:
           if l.strip()]
     b2 = [json.loads(l) for l in open(base + ".evidence3d.jsonl", encoding="utf-8")
           if l.strip()]
-    fused = [fuse_dicts(a, b) for a, b in
-             zip([r for r in b1 if r.get("scored")], b2)]
+    fused = fuse_streams(b1, b2, os.path.basename(base))
     beliefs = decoder_corpus.replay_beliefs(fused)     # the calibrated v1 replay
     packets = JsonlSource(jsonl_path, base + ".manifest.json").load().packets
     positions = {p.tick: (p.server.player_pos.x, p.server.player_pos.y,

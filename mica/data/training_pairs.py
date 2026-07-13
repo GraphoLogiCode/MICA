@@ -122,6 +122,22 @@ def load_source_b() -> list[Sample]:
     return samples
 
 
+def load_source_b_contested() -> list[Sample]:
+    """The CONTESTED real captures' pairs, stamped with the builder's own label —
+    written only by label_finished_builds --contested-pairs for the pre-registered
+    2026-07-12 comparison experiment. A separate loader on a separate suffix:
+    the production path (load_source_b) can never pick these up by accident, and
+    only a trainer that explicitly opts in ever sees them. Deliberative supervision
+    only, like all of Source B (hindsight labels carry no mode ground truth)."""
+    import glob
+
+    samples = []
+    for path in sorted(glob.glob(os.path.join(_RAW, "**", "*.source_b_contested.jsonl"),
+                                 recursive=True)):
+        samples.extend(_load_session_pairs(path, "B", None))
+    return samples
+
+
 def split(samples: list[Sample]) -> tuple[list[Sample], list[Sample]]:
     """(train, validation) under the pinned rule. Validation holds out whole sessions —
     never records — so no session's evidence appears on both sides."""

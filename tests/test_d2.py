@@ -33,7 +33,7 @@ def test_pen_wins_the_category_contest_and_names_its_style():
     trailing_idle = records[-1]
     top_goal = max(last_place.per_goal, key=lambda g: last_place.per_goal[g].comp)
     assert top_goal == "production"
-    assert last_place.per_goal["production"].subtype == "fence pen"   # the fine layer
+    assert last_place.per_goal["production"].subtype == "animal_husbandry"   # the fine layer (v3 style read)
     # a half-built ring encloses nothing (the missing corner at the very end is a
     # different story: a corner gap blocks 4-connected passage, so 15 posts DO enclose)
     halfway = [r for r in records if r.event_ids][8]
@@ -67,8 +67,8 @@ def test_bridge_registration_finds_rotation_and_style():
     _, along_z = _run(bridge_deck_build(axis="z"))
     fit_x = along_x[-1].per_goal["infrastructure"]
     fit_z = along_z[-1].per_goal["infrastructure"]
-    assert fit_x.fit > 0.9 and fit_x.pose.rot in (0, 180) and fit_x.subtype == "railed bridge"
-    assert fit_z.fit > 0.9 and fit_z.pose.rot in (90, 270) and fit_z.subtype == "railed bridge"
+    assert fit_x.fit > 0.9 and fit_x.pose.rot in (0, 180) and fit_x.subtype == "bridge"
+    assert fit_z.fit > 0.9 and fit_z.pose.rot in (90, 270) and fit_z.subtype == "bridge"
 
 
 def test_join_is_one_to_one_and_contract_clean():

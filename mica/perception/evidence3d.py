@@ -110,15 +110,17 @@ def _read_goal(world: ReplayWorld, template: Template, built) -> _GoalReading:
 
 
 def _best_instance(world: ReplayWorld, goal: str, built) -> tuple[_GoalReading, str]:
-    # A category is backed by one instance per style; the category feature is the best
-    # instance's reading, and that instance's name is the style read (coarse-to-fine).
+    # A category is backed by its template instances; the category feature is the best
+    # instance's reading, and that instance's SUBTYPE is the style read (coarse-to-fine;
+    # since taxonomy v3 several instances can share one subtype — cabin and longhouse
+    # both report "house").
     #
     # Ranked by fit x comp (D2 gate 2026-07-03 F1), because each factor alone fails:
     # fit is blind to missing upper layers (a bare deck would read "railed bridge" —
     # rails share the deck's footprint), and comp is terrain-inflatable (a flat template
     # soaks up natural ground and wins the style slot on real terrain — observed live).
     # The product demands both: the shape is present AND the player put it there.
-    readings = [(_read_goal(world, template, built), template.name)
+    readings = [(_read_goal(world, template, built), template.subtype)
                 for template in TEMPLATES[goal]]
     return max(readings, key=lambda pair: (pair[0].fit * pair[0].comp, pair[0].fit))
 

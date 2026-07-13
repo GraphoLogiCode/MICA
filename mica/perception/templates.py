@@ -1,9 +1,12 @@
-"""The hand-authored template instances — one buildable shape per taxonomy subtype.
+"""The hand-authored template instances — buildable shapes realizing taxonomy subtypes.
 
 A template is the structure channel's analog of a model weight: it decides what a build
 "looks like progress toward", so the set carries a version and every evidence artifact
-records it. Each instance IS one subtype of the goal taxonomy (contracts/goals.py) —
-the winning instance in registration is the style read, which is how coarse-to-fine
+records it. Since taxonomy v3 an instance and its subtype are separate: several
+instances can realize one subtype (cabin and longhouse are both "house"), and some
+subtypes have no instance at all (break-dominant styles — mining, moats — are outside
+the placement-only contract, per the Taxonomy v3 vault note). The winning instance in
+registration reports its SUBTYPE as the style read, which is how coarse-to-fine
 inference gets its fine layer without widening s_goal beyond the five categories.
 
 Every instance fits the ~16x16x16 cap and is buildable purely by placing blocks (the
@@ -22,7 +25,7 @@ from typing import Mapping
 
 from ..contracts.goals import GOALS, TAXONOMY
 
-TEMPLATE_SET_VERSION = "3"   # v3 (2026-07-02): the functional-category taxonomy, 15 subtypes
+TEMPLATE_SET_VERSION = "4"   # v4 (2026-07-10): taxonomy v3 re-key + gatehouse, vertical_transit
 REQ_SOLID = "#solid"         # any non-air block satisfies this cell
 
 _FENCE = "minecraft:oak_fence"
@@ -33,10 +36,16 @@ _FLOWER = "minecraft:poppy"
 
 @dataclass(frozen=True)
 class Template:
-    """One style's shape: required blocks at offsets from its local origin."""
+    """One buildable shape: required blocks at offsets from its local origin.
 
-    name: str      # equals its taxonomy subtype
+    Since taxonomy v3, the instance NAME and the SUBTYPE it realizes are separate:
+    cabin and longhouse are two instances of the "house" subtype. The winning
+    instance's subtype is the style read; the instance name stays for provenance
+    (session ids, diversity reports)."""
+
+    name: str      # this instance's own name (unique across the set)
     goal: str      # the category it belongs to
+    subtype: str   # the taxonomy v3 subtype this instance realizes
     cells: Mapping[tuple[int, int, int], str]   # (dx, dy, dz) -> required block / REQ_SOLID
 
 
@@ -79,7 +88,7 @@ def _cabin() -> Template:
     cells.update(_rect_perimeter(5, 5, 0, REQ_SOLID))
     cells.update(_rect_perimeter(5, 5, 1, REQ_SOLID))
     cells.update(_slab_layer(5, 5, 2, REQ_SOLID))
-    return Template(name="cabin", goal="habitation", cells=cells)
+    return Template(name="cabin", goal="habitation", subtype="house", cells=cells)
 
 
 def _longhouse() -> Template:
@@ -87,7 +96,7 @@ def _longhouse() -> Template:
     cells.update(_rect_perimeter(7, 5, 0, REQ_SOLID))
     cells.update(_rect_perimeter(7, 5, 1, REQ_SOLID))
     cells.update(_slab_layer(7, 5, 2, REQ_SOLID))
-    return Template(name="longhouse", goal="habitation", cells=cells)
+    return Template(name="longhouse", goal="habitation", subtype="house", cells=cells)
 
 
 def _treehouse() -> Template:
@@ -95,7 +104,7 @@ def _treehouse() -> Template:
     # high up — habitation that grows upward before it grows outward.
     cells = {(2, y, 2): REQ_SOLID for y in range(5)}
     cells.update(_slab_layer(5, 5, 5, REQ_SOLID))
-    return Template(name="treehouse", goal="habitation", cells=cells)
+    return Template(name="treehouse", goal="habitation", subtype="house", cells=cells)
 
 
 # ---- infrastructure: elongated, open, low ---------------------------------------------
@@ -105,16 +114,16 @@ def _railed_bridge() -> Template:
     for dx in range(7):
         cells[(dx, 1, 0)] = REQ_SOLID
         cells[(dx, 1, 2)] = REQ_SOLID
-    return Template(name="railed bridge", goal="infrastructure", cells=cells)
+    return Template(name="railed bridge", goal="infrastructure", subtype="bridge", cells=cells)
 
 
 def _flat_span() -> Template:
-    return Template(name="flat span", goal="infrastructure", cells=_slab_layer(9, 3, 0, REQ_SOLID))
+    return Template(name="flat span", goal="infrastructure", subtype="bridge", cells=_slab_layer(9, 3, 0, REQ_SOLID))
 
 
 def _road() -> Template:
     # Long and narrow, nothing above it — movement, not crossing.
-    return Template(name="road", goal="infrastructure", cells=_slab_layer(11, 2, 0, REQ_SOLID))
+    return Template(name="road", goal="infrastructure", subtype="path_road", cells=_slab_layer(11, 2, 0, REQ_SOLID))
 
 
 # ---- production: flat ground work or fenced ground ------------------------------------
@@ -122,18 +131,18 @@ def _road() -> Template:
 def _crop_field() -> Template:
     cells = _slab_layer(7, 7, 0, REQ_SOLID)
     del cells[(3, 0, 3)]   # the classic center water gap
-    return Template(name="crop field", goal="production", cells=cells)
+    return Template(name="crop field", goal="production", subtype="crop_farm", cells=cells)
 
 
 def _bordered_plot() -> Template:
     cells = _rect_perimeter(5, 5, 0, _LOG)
     cells.update({(dx, 0, dz): REQ_SOLID for dx in range(1, 4) for dz in range(1, 4)})
-    return Template(name="bordered plot", goal="production", cells=cells)
+    return Template(name="bordered plot", goal="production", subtype="crop_farm", cells=cells)
 
 
 def _fence_pen() -> Template:
     # Fences: the one ring a landscape can never fake.
-    return Template(name="fence pen", goal="production", cells=_rect_perimeter(5, 5, 0, _FENCE))
+    return Template(name="fence pen", goal="production", subtype="animal_husbandry", cells=_rect_perimeter(5, 5, 0, _FENCE))
 
 
 def _post_and_rail_pen() -> Template:
@@ -141,7 +150,7 @@ def _post_and_rail_pen() -> Template:
              for dx, dz in ((0, 0), (0, 4), (4, 0), (4, 4), (2, 0), (2, 4), (0, 2), (4, 2))}
     rails = {(dx, 1, dz): _SLAB for (dx, _, dz) in _rect_perimeter(5, 5, 0, _SLAB)}
     posts.update(rails)
-    return Template(name="post-and-rail pen", goal="production", cells=posts)
+    return Template(name="post-and-rail pen", goal="production", subtype="animal_husbandry", cells=posts)
 
 
 # ---- defense: thin and vertical --------------------------------------------------------
@@ -151,20 +160,20 @@ def _square_tower() -> Template:
     for y in range(6):
         cells.update(_rect_perimeter(3, 3, y, REQ_SOLID))
     cells.update(_slab_layer(3, 3, 6, REQ_SOLID))
-    return Template(name="square tower", goal="defense", cells=cells)
+    return Template(name="square tower", goal="defense", subtype="watchtower", cells=cells)
 
 
 def _pillar_tower() -> Template:
     cells = {}
     for y in range(8):
         cells.update(_slab_layer(2, 2, y, REQ_SOLID))
-    return Template(name="pillar tower", goal="defense", cells=cells)
+    return Template(name="pillar tower", goal="defense", subtype="watchtower", cells=cells)
 
 
 def _perimeter_wall() -> Template:
     # A single straight run, three high, one thick — territory control, not shelter.
     cells = {(dx, y, 0): REQ_SOLID for dx in range(9) for y in range(3)}
-    return Template(name="perimeter wall", goal="defense", cells=cells)
+    return Template(name="perimeter wall", goal="defense", subtype="perimeter_wall", cells=cells)
 
 
 # ---- decorative/civic: small, ornamental, symmetric ------------------------------------
@@ -172,34 +181,88 @@ def _perimeter_wall() -> Template:
 def _flower_garden() -> Template:
     # A checkerboard of planted flowers — exact blocks, so a meadow is not a garden.
     cells = {(dx, 0, dz): _FLOWER for dx in range(5) for dz in range(5) if (dx + dz) % 2 == 0}
-    return Template(name="flower garden", goal="decorative", cells=cells)
+    return Template(name="flower garden", goal="decorative", subtype="landscaping_garden", cells=cells)
 
 
 def _fountain() -> Template:
     cells = _rect_perimeter(5, 5, 0, REQ_SOLID)
     cells[(2, 0, 2)] = REQ_SOLID
     cells[(2, 1, 2)] = REQ_SOLID
-    return Template(name="fountain", goal="decorative", cells=cells)
+    return Template(name="fountain", goal="decorative", subtype="fountain_water_feature", cells=cells)
+
+
+# ---- v4 additions: the two v3 subtypes a placement-only template CAN represent ---------
+
+def _gatehouse() -> Template:
+    # A wall run pierced by a doorway, with a taller flanking column each side —
+    # an entrance made defensible, which is what separates it from a plain wall.
+    cells = {}
+    for dx in range(7):
+        for y in range(3):
+            if dx in (3,) and y < 2:
+                continue                      # the doorway: a 1x2 opening at center
+            cells[(dx, y, 0)] = REQ_SOLID
+    for y in range(4):
+        cells[(1, y, 0)] = REQ_SOLID          # flanking columns rise above the wall
+        cells[(5, y, 0)] = REQ_SOLID
+    return Template(name="gatehouse", goal="defense", subtype="gatehouse", cells=cells)
+
+
+def _stair_ramp() -> Template:
+    # A two-wide staircase climbing eight steps onto a landing — vertical connection,
+    # not a tower: the diagonal rise plus the flat top is what a pillar, wall, or
+    # gatehouse never has (a bare ramp at 90% completion read back as a gatehouse —
+    # both are thin planes — so the landing carries the disambiguation).
+    cells = {}
+    for step in range(8):
+        cells[(step, step, 0)] = REQ_SOLID
+        cells[(step, step, 1)] = REQ_SOLID
+    for dx in range(8, 11):
+        for dz in range(-1, 3):
+            cells[(dx, 7, dz)] = REQ_SOLID
+    return Template(name="stair ramp", goal="infrastructure", subtype="vertical_transit",
+                    cells=cells)
 
 
 TEMPLATES: dict[str, tuple[Template, ...]] = {
     "habitation": (_cabin(), _longhouse(), _treehouse()),
-    "infrastructure": (_railed_bridge(), _flat_span(), _road()),
+    "infrastructure": (_railed_bridge(), _flat_span(), _road(), _stair_ramp()),
     "production": (_crop_field(), _bordered_plot(), _fence_pen(), _post_and_rail_pen()),
-    "defense": (_square_tower(), _pillar_tower(), _perimeter_wall()),
+    "defense": (_square_tower(), _pillar_tower(), _perimeter_wall(), _gatehouse()),
     "decorative": (_flower_garden(), _fountain()),
 }
 
 
-def instance(subtype: str) -> Template:
-    """The template that realizes one taxonomy subtype."""
+def instance(name: str) -> Template:
+    """One template instance by its own name (e.g. "cabin" — an instance of "house")."""
     for templates in TEMPLATES.values():
         for template in templates:
-            if template.name == subtype:
+            if template.name == name:
                 return template
-    raise KeyError(subtype)
+    raise KeyError(name)
+
+
+def instances(goal: str) -> tuple[Template, ...]:
+    """Every template instance backing one category."""
+    return TEMPLATES[goal]
+
+
+def template_backed(goal: str) -> tuple[str, ...]:
+    """The v3 subtypes of this category the matcher can actually confirm — the ones
+    with at least one instance. Definitions-only subtypes are labelable but never
+    appear as a style read."""
+    seen = []
+    for template in TEMPLATES[goal]:
+        if template.subtype not in seen:
+            seen.append(template.subtype)
+    return tuple(seen)
 
 
 assert set(TEMPLATES) == set(GOALS), "every category needs template instances"
-assert all({t.name for t in TEMPLATES[goal]} == set(TAXONOMY[goal]) for goal in GOALS), \
-    "template instances and taxonomy subtypes must be the same names"
+# v3 decouples names from subtypes: instances keep unique names, and every instance's
+# subtype must be a real taxonomy entry of its own category (not every subtype has an
+# instance — definitions-only styles are the taxonomy note's recorded gap).
+_names = [t.name for templates in TEMPLATES.values() for t in templates]
+assert len(_names) == len(set(_names)), "instance names must be unique across the set"
+assert all(t.subtype in TAXONOMY[goal] for goal, templates in TEMPLATES.items()
+           for t in templates), "every instance's subtype must exist in its category"

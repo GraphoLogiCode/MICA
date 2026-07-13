@@ -79,6 +79,9 @@ def fuse_dicts(b1: dict, b2: dict) -> FusedEvidence:
             held_item=sf["held_item"], hotbar=tuple(sf["hotbar"]),
             pos_delta=tuple(sf["pos_delta"]), yaw_delta=sf["yaw_delta"],
             pitch_delta=sf["pitch_delta"], recent_actions=tuple(sf["recent_actions"]),
+            inventory=(tuple((item, count) for item, count in sf["inventory"])
+                       if sf.get("inventory") is not None else None),
+            inventory_tick=sf.get("inventory_tick"),
         ),
         focus=Focus(block=None if fo["block"] is None else BlockPos(*fo["block"]),
                     dwell_ticks=fo["dwell_ticks"]),
@@ -110,3 +113,19 @@ def fuse_dicts(b1: dict, b2: dict) -> FusedEvidence:
         h3d=tuple(b2["h3d"]) if b2.get("h3d") else None,
     )
     return fuse(typed_b1, typed_b2)
+
+
+def fuse_streams(b1_dicts: list[dict], b2_dicts: list[dict],
+                 session_id: str = "?") -> list[FusedEvidence]:
+    """Fuse a whole session's serialized streams: the scored B1 records joined 1:1
+    with the B2 records, COUNTS ASSERTED FIRST. Every offline eval used to pair
+    these with a bare zip, which silently truncates on a mismatch — session
+    210003's broken evidence hid inside every eval for a week that way (found
+    2026-07-12). A mismatch now names the session and both counts, loudly."""
+    scored = [record for record in b1_dicts if record.get("scored")]
+    if len(scored) != len(b2_dicts):
+        raise ValueError(
+            f"{session_id}: {len(scored)} scored B1 vs {len(b2_dicts)} B2 records — "
+            "the banked evidence is inconsistent; regenerate it (--redo-evidence) "
+            "instead of evaluating a truncated stream")
+    return [fuse_dicts(a, b) for a, b in zip(scored, b2_dicts)]

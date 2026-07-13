@@ -45,7 +45,7 @@ _BUILD_ACTIONS = (MacroAction.PLACE.value, MacroAction.BREAK.value)
 def _enrich_pixels(records, session, stride, jsonl):
     """Fill h2d (from the record's window) + s_goal (last 16 frames at the given stride,
     reaching further back than the window when stride > 1 — still strictly pre-action)."""
-    from PIL import Image
+    from PIL import Image, UnidentifiedImageError
     from mica.perception.mineclip_head import _CLIP_LEN, MineClipHead
     from mica.perception.vpt_trunk import VptTrunk
 
@@ -56,16 +56,25 @@ def _enrich_pixels(records, session, stride, jsonl):
     # the jsonl actually sits now.
     capture_dir = os.path.dirname(os.path.abspath(jsonl))
 
+    unreadable_frames: set[str] = set()
+
     def frames_between(t0, t1):
         loaded = []
-        for t in range(t0, t1 + 1):
-            packet = by_tick.get(t)
+        for tick in range(t0, t1 + 1):
+            packet = by_tick.get(tick)
             ref = packet.client.pov_frame if packet else None
             path = (session_store.resolve_frame(ref.path, session.manifest.session_id,
                                                 capture_dir) if ref is not None else None)
-            if path is not None:
+            if path is None:
+                continue
+            try:
                 with Image.open(path) as image:
                     loaded.append(image.convert("RGB"))   # load into memory; the file handle closes here
+            except (UnidentifiedImageError, OSError):
+                # A frame the mod never finished writing (the game died mid-write).
+                # One truncated PNG must not kill the whole pixel pass — skip it,
+                # and say so once below instead of pretending it loaded.
+                unreadable_frames.add(os.path.basename(path))
         return loaded
 
     enriched = []
@@ -79,6 +88,9 @@ def _enrich_pixels(records, session, stride, jsonl):
             continue
         clip = window if stride == 1 else frames_between(t1 - _CLIP_LEN * stride + 1, t1)
         enriched.append(dataclasses.replace(ev, h2d=vpt.embed(window), s_goal=mineclip.score(clip, stride)))
+    if unreadable_frames:
+        print(f"  ! {len(unreadable_frames)} unreadable frame(s) skipped "
+              f"(truncated by a dying game): {sorted(unreadable_frames)[:3]}...")
     return enriched
 
 

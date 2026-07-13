@@ -48,6 +48,19 @@ def check_record(record: Evidence2D, h2d_dim: int | None = None) -> list[str]:
             issues.append(f"state_feats.pos_delta not length 3: {sf.pos_delta}")
         if not all(isinstance(a, str) for a in sf.recent_actions):
             issues.append("state_feats.recent_actions not a tuple[str]")
+        if (sf.inventory is None) is not (sf.inventory_tick is None):
+            issues.append("state_feats.inventory and inventory_tick must be filled or None together")
+        if sf.inventory is not None:
+            if not all(isinstance(item, str) and isinstance(count, int) and count > 0
+                       for item, count in sf.inventory):
+                issues.append("state_feats.inventory not (item, positive count) pairs")
+            # The D7 leakage rule's checkable half: the sample predates the window's
+            # end. For a scored record t1 IS the tick before the action, so this is
+            # the full rule there; a context record's run-start bound is enforced at
+            # construction (the stream pins it to the run's own pre-action sample).
+            if sf.inventory_tick > t1:
+                issues.append(f"inventory sampled at {sf.inventory_tick}, after the "
+                              f"window end {t1} — action leakage")
 
     if not isinstance(record.focus, Focus) or record.focus.dwell_ticks < 0:
         issues.append(f"focus invalid: {record.focus}")

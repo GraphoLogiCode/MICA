@@ -21,7 +21,7 @@ import torch as th
 from PIL import Image
 
 from ..contracts.b1 import GOALS   # the contract goal set (|G|) — fixes the s_goal vector length
-from ..contracts.goals import TAXONOMY   # each category's score pools its subtypes' prompts
+from ..contracts.goals import PHRASES, TAXONOMY   # category scores pool subtype-phrase prompts
 
 # A small prompt ensemble per goal (the D1 spec's first s_goal-flatness mitigation): a few phrasings
 # averaged at load, with the article picked per goal so it reads "an animal pen" / "a house".
@@ -82,7 +82,7 @@ class MineClipHead:
                 # embeddings — "building a cabin", "building a treehouse", ... — because
                 # the category names themselves ("habitation") are not things anyone
                 # builds, and the pooling is exactly the coarse level of the taxonomy.
-                prompts = [t.format(a=_article(s), goal=s)
+                prompts = [t.format(a=_article(PHRASES[s]), goal=PHRASES[s])
                            for s in TAXONOMY[goal] for t in PROMPT_TEMPLATES]
                 emb = model.encode_text(prompts)                      # [n_templates, 512]
                 emb = emb / emb.norm(dim=-1, keepdim=True)

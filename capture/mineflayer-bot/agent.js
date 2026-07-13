@@ -45,6 +45,7 @@ const net = require('net');
 const path = require('path');
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
+const patrolMath = require('./patrol_math');   // coverage patrol v2: the pure math
 const Vec3 = require('vec3');
 
 const HOST = process.env.MICA_HOST || '127.0.0.1';
@@ -274,53 +275,70 @@ function start(port) {
   // above patrol: gate YIELD, the workspace rule, and the personal band all win,
   // and the moment the human acts nearby the normal follow behavior returns.
   const PATROL_MIN_UNSEEN = 0.10;    // engage only while >10% of the build is unseen
-  const PATROL_STANDOFF = 7;         // stand this far back from the unseen face
   const PATROL_REPOSITION_MS = 8000; // one vantage move at most every 8 s
+  const AT_REST_MS = 60000;          // build at rest = human idle + no new blocks this long
   let lastPatrolMoveMs = 0;
-  let patrolLook = null;             // where the eyes sweep while patrolling
+  let patrolCluster = null;          // the unseen cluster the eyes sweep while patrolling
+  // Patrol v2 (2026-07-11, patrol_math.js): the body accumulates the mind's
+  // per-write built-cell SAMPLES into a working set (large builds no longer fit
+  // one status line), clusters the unseen cells instead of averaging them into a
+  // phantom mid-structure target, and picks exposure-aware vantages — height for
+  // roofs, beneath-looking-up for ceiling undersides. Standing ON the human's
+  // build is allowed only while the build is at rest (the user's climb rule).
+  const builtStore = new Map();
+  let lastBuiltCount = 0;
+  let lastBuiltChangeMs = 0;
 
-  function unseenBuiltCells() {
-    if (!liveStatus || !liveStatus.built_cells || !liveStatus.built_cells.length) return null;
-    const unseen = liveStatus.built_cells.filter(c => !scanSeen.has(`${c[0]},${c[1]},${c[2]}`));
-    return { unseen, total: liveStatus.built_cells.length };
+  function buildAtRest(now) {
+    const idle = liveStatus && liveStatus.current_behavior === 'idle';
+    return idle && now - lastBuiltChangeMs >= AT_REST_MS;
   }
 
-  function centroidOf(cells) {
-    let x = 0, y = 0, z = 0;
-    for (const c of cells) { x += c[0]; y += c[1]; z += c[2]; }
-    return new Vec3(x / cells.length + 0.5, y / cells.length + 0.5, z / cells.length + 0.5);
+  function isAirAt(x, y, z) {
+    const block = bot.blockAt(new Vec3(x, y, z));
+    return !block || block.boundingBox === 'empty';
+  }
+
+  function standingOnBuild() {
+    const me = bot.entity && bot.entity.position;
+    if (!me) return false;
+    const below = `${Math.floor(me.x)},${Math.floor(me.y) - 1},${Math.floor(me.z)}`;
+    return builtStore.has(below);
   }
 
   function patrolTick(me, them, focus, now) {
-    const gap = unseenBuiltCells();
-    if (!gap || gap.unseen.length / gap.total < PATROL_MIN_UNSEEN) {
-      if (followMode === 'patrolling') { setGoal(null); followMode = 'holding'; patrolLook = null; }
+    const known = patrolMath.storeCells(builtStore);
+    if (!known.length) return false;
+    const unseen = known.filter(c => !scanSeen.has(`${c[0]},${c[1]},${c[2]}`));
+    if (unseen.length / known.length < PATROL_MIN_UNSEEN) {
+      if (followMode === 'patrolling') { setGoal(null); followMode = 'holding'; patrolCluster = null; }
       return false;                   // coverage is good: nothing to patrol for
     }
-    const unseenC = centroidOf(gap.unseen);
-    const buildC = centroidOf(liveStatus.built_cells);
-    // Stand OUTSIDE the unseen face, looking back at it: out along the direction
-    // from the build's center through the unseen cluster. An interior gap (the
-    // two centroids coincide) is viewed from wherever the agent already is.
-    let out = unseenC.minus(buildC); out.y = 0;
-    if (out.norm() < 0.5) { out = me.minus(unseenC); out.y = 0; }
-    if (out.norm() < 0.5) out = new Vec3(1, 0, 0);
-    out = out.normalize();
-    const vantage = unseenC.plus(out.scaled(PATROL_STANDOFF));
+    const clusters = patrolMath.clusterUnseen(unseen);
+    const cluster = patrolMath.pickCluster(clusters, [me.x, me.y, me.z]);
+    if (!cluster) return false;
+    const buildC = patrolMath.clusterUnseen(known)[0]
+      ? patrolMath.clusterUnseen(known).reduce((a, b) => (a.cells.length >= b.cells.length ? a : b)).centroid
+      : cluster.centroid;
+    const exposure = patrolMath.classifyExposure(cluster, isAirAt);
+    let vantage = patrolMath.vantageFor(cluster, exposure, buildC, [me.x, me.y, me.z]);
+    if (vantage.onBuildLikely && !buildAtRest(now)) {
+      // The climb rule: high vantages can mean standing on the human's build, so
+      // they wait for the at-rest window; until then take the level view of the
+      // same cluster (partial coverage now beats trespassing).
+      vantage = patrolMath.vantageFor(cluster, 'side', buildC, [me.x, me.y, me.z]);
+    }
+    const spot = new Vec3(vantage.pos[0], vantage.pos[1], vantage.pos[2]);
     // The same vetoes as everything else: never into the workspace, never into
     // the human's personal space — if the vantage would violate them, no patrol.
-    if (focus && vantage.distanceTo(focus) < WORKSPACE_R + 1) return false;
-    if (them && vantage.distanceTo(them) < FOLLOW_NEAR + 1) return false;
+    if (focus && spot.distanceTo(focus) < WORKSPACE_R + 1) return false;
+    if (them && spot.distanceTo(them) < FOLLOW_NEAR + 1) return false;
     if (now - lastPatrolMoveMs >= PATROL_REPOSITION_MS) {
-      setGoal(new goals.GoalNear(vantage.x, vantage.y, vantage.z, 2));
+      setGoal(new goals.GoalNear(spot.x, spot.y, spot.z, 2));
       lastPatrolMoveMs = now;
-      lastAction = `patrol: ${gap.unseen.length} unseen cells`;
+      lastAction = `patrol: ${unseen.length} unseen, ${exposure} cluster of ${cluster.cells.length}`;
     }
-    // Sweep the gaze across the unseen cluster (a slow pendulum around its center)
-    // so the ray grid passes over every face; scanTick records what it meets.
-    const swing = Math.sin(now / 1500);
-    const perp = new Vec3(-out.z, 0, out.x).scaled(swing * 4);
-    patrolLook = unseenC.plus(perp);
+    patrolCluster = cluster;          // lookTick sweeps this cluster's real extent
     followMode = 'patrolling';
     return true;
   }
@@ -328,6 +346,7 @@ function start(port) {
   let lastBackoffMs = 0;
   function followTick() {
     if (agentState !== 'present') return;
+    if (gathering) return;   // a gather errand owns the pathfinder until it ends
     const human = nearestHuman();
     if (!human || !human.entity) {
       if (followMode !== 'searching') { setGoal(null); followMode = 'searching'; }
@@ -362,7 +381,18 @@ function start(port) {
         && d >= nearBand && patrolTick(me, them, focus, now)) {
       return;
     }
-    if (followMode === 'patrolling') { patrolLook = null; followMode = 'holding'; }
+    if (followMode === 'patrolling') { patrolCluster = null; followMode = 'holding'; }
+    // The climb rule's other half: the moment the build stops being at rest, an
+    // agent standing ON it gets off — retreat toward the human's band, which is
+    // always ground the human can stand on too.
+    if (standingOnBuild() && !buildAtRest(now)) {
+      if (now - lastBackoffMs > 750) {
+        setGoal(new goals.GoalFollow(human.entity, FOLLOW_NEAR + 1), true);
+        lastBackoffMs = now;
+      }
+      followMode = 'dismounting';
+      return;
+    }
     if (d > FOLLOW_FAR && Date.now() >= yieldUntilMs) {
       if (followMode !== 'following') {
         setGoal(new goals.GoalFollow(human.entity, FOLLOW_NEAR + 1), true);
@@ -388,10 +418,13 @@ function start(port) {
   // crosshair rests, which is what "watching what the player does" means.
   function lookTick() {
     if (agentState !== 'present') return;
-    if (followMode === 'patrolling' && patrolLook) {
-      // On patrol the eyes belong to the scan: sweep the unseen cluster instead
-      // of mirroring the human (who is idle or far — that's why patrol engaged).
-      bot.lookAt(patrolLook).catch(() => {});
+    if (followMode === 'patrolling' && patrolCluster) {
+      // On patrol the eyes belong to the scan: a two-axis sweep across the
+      // cluster's own extent (patrol v2 — the old fixed pendulum never crossed
+      // a roof plane), instead of mirroring the human (idle or far — that's
+      // why patrol engaged).
+      const look = patrolMath.sweepLook(patrolCluster, Date.now());
+      bot.lookAt(new Vec3(look[0], look[1], look[2])).catch(() => {});
       return;
     }
     const human = nearestHuman();
@@ -445,6 +478,12 @@ function start(port) {
         }
       }
       lastAction = `gate: ${gate.state}`;
+    } else if (gate.state === 'gather' && gate.gather && !gathering && !gatherStopped
+               && agentState === 'present') {
+      // The mind cleared the D5 lattice (declared target or theta_place, safe
+      // window, hysteresis); the body announces and runs ONE errand at a time.
+      runGatherErrand(liveStatus, gate.gather);
+      lastAction = 'gate: gather';
     }
     // The materials ask (D5 §4): substitution is never silent — when the gate says
     // it is short a block and sees a same-family stand-in in the inventory, ask
@@ -465,13 +504,87 @@ function start(port) {
     return true;
   }
 
-  // The human's answer to a pending materials ask. Only an explicit "yes" grants
-  // the one block->substitute equivalence (session-scoped); "no" is remembered so
-  // the same question is never asked twice. The grant reaches the mind through
-  // the status file's material_grants field.
+  // --- autonomous gathering (D5 §4 amendment, 2026-07-10) ---------------------
+  // Runs ONLY while the REAL gate publishes state === 'gather' (the mind already
+  // checked declaration/threshold + safe window + hysteresis). The body re-checks
+  // its own guardrails anyway: whitelisted source only, never inside the capture
+  // region plus a 16-block buffer, never a mind-known built cell, one errand at a
+  // time, one stack cap, announced first, chat "stop" aborts instantly.
+  const GATHER_BUFFER = 16;
+  const GATHER_WHITELIST = new Set(['oak_log', 'spruce_log', 'birch_log', 'stone',
+    'cobblestone', 'dirt', 'sand', 'gravel', 'poppy', 'dandelion']);
+  let gathering = null;          // { source, count, mined, forBlock } while an errand runs
+  let gatherStopped = false;     // the human said stop — stands until they say "go on"
+
+  function insideProtected(pos, status) {
+    const region = status && status.region;
+    if (!region) return true;    // unknown region: protect everything (fail safe)
+    return pos.x >= region[0] - GATHER_BUFFER && pos.x <= region[3] + GATHER_BUFFER
+        && pos.z >= region[2] - GATHER_BUFFER && pos.z <= region[5] + GATHER_BUFFER;
+  }
+
+  async function runGatherErrand(status, plan) {
+    const errand = ((plan && plan.plan) || []).find((entry) => entry.gather);
+    if (!errand || !GATHER_WHITELIST.has(errand.gather)) return;
+    gathering = { source: errand.gather, count: Math.min(errand.count || 1, 64),
+                  mined: 0, forBlock: errand.for };
+    bot.chat(`Gathering ${gathering.count} ${gathering.source} for the ${plan.target}`
+      + ' — say stop to cancel.');
+    lastAction = `gather: ${gathering.source}`;
+    try {
+      const type = bot.registry && bot.registry.blocksByName[gathering.source];
+      if (!type) return;
+      const built = new Set(((status && status.built_cells) || [])
+        .map(([x, y, z]) => `${x},${y},${z}`));
+      while (gathering && !gatherStopped && gathering.mined < gathering.count) {
+        const found = bot.findBlocks({ matching: type.id, maxDistance: 48, count: 24 })
+          .filter((pos) => !insideProtected(pos, status)
+            && !built.has(`${pos.x},${pos.y},${pos.z}`));
+        if (!found.length) {
+          bot.chat(`No ${gathering.source} in reach outside your build area — `
+            + 'leaving that to you.');
+          break;
+        }
+        await bot.pathfinder.goto(new goals.GoalGetToBlock(
+          found[0].x, found[0].y, found[0].z));
+        if (!gathering || gatherStopped) break;
+        const block = bot.blockAt(found[0]);
+        if (!block || block.name !== gathering.source) continue;   // world moved on
+        await bot.dig(block);
+        gathering.mined += 1;
+      }
+      if (gathering && gathering.mined >= gathering.count) {
+        bot.chat(`Done — ${gathering.mined} ${gathering.source} gathered.`);
+      }
+    } catch (err) {
+      lastAction = `gather aborted: ${err.message}`;
+    } finally {
+      gathering = null;
+      try { bot.pathfinder.setGoal(null); } catch (e) { /* mid-respawn */ }
+    }
+  }
+
+  // The human's answer to a pending materials ask, and the gather kill-switch.
+  // Only an explicit "yes" grants the one block->substitute equivalence
+  // (session-scoped); "no" is remembered so the same question is never asked
+  // twice. The grant reaches the mind through the status file's material_grants.
   bot.on('chat', (username, message) => {
-    if (username === NAME || !pendingAsk) return;
-    const text = String(message).trim().toLowerCase();
+    if (username === NAME) return;
+    const said = String(message).trim().toLowerCase();
+    if (/^stop\b/.test(said)) {
+      if (gathering) bot.chat('Stopping — errand dropped.');
+      gathering = null;
+      gatherStopped = true;
+      try { bot.pathfinder.setGoal(null); } catch (e) { /* mid-respawn */ }
+      return;
+    }
+    if (/^(go on|resume)\b/.test(said) && gatherStopped) {
+      gatherStopped = false;
+      bot.chat('Okay — I may gather again when materials run short.');
+      return;
+    }
+    if (!pendingAsk) return;
+    const text = said;
     if (/^(yes|yeah|ok|okay|sure)\b/.test(text)) {
       materialGrants[pendingAsk.block] = pendingAsk.substitute;
       bot.chat(`Noted — ${pendingAsk.substitute} stands in for ${pendingAsk.block} this session.`);
@@ -490,6 +603,16 @@ function start(port) {
   function liveTick() {
     liveStatus = readLiveStatus();
     if (liveStatus && liveStatus.session_id) scanSessionId = liveStatus.session_id;
+    if (liveStatus && liveStatus.built_cells) {
+      // Patrol v2: each status write carries a fresh SAMPLE of the built set —
+      // accumulate them so the patrol's target set covers the whole build.
+      patrolMath.accumulateCells(builtStore, liveStatus.built_cells,
+                                 liveStatus.built_count, Date.now());
+      if ((liveStatus.built_count || 0) !== lastBuiltCount) {
+        lastBuiltCount = liveStatus.built_count || 0;
+        lastBuiltChangeMs = Date.now();   // the at-rest clock for the climb rule
+      }
+    }
     if (liveStatus && renderGate(liveStatus.gate)) {
       return;   // the gate spoke (or chose silence); the fallback advisory stays quiet
     }

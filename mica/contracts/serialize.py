@@ -63,14 +63,20 @@ def packet_to_dict(packet) -> dict:
 def evidence2d_to_dict(ev) -> dict:
     """A B1 record as its JSONL line dict (one scored or context Evidence2D)."""
     sf, f = ev.state_feats, ev.focus
+    state = {
+        "held_item": sf.held_item, "hotbar": list(sf.hotbar), "pos_delta": list(sf.pos_delta),
+        "yaw_delta": sf.yaw_delta, "pitch_delta": sf.pitch_delta, "recent_actions": list(sf.recent_actions),
+    }
+    if sf.inventory is not None:
+        # Written only when a sample exists: an old capture's regenerated line stays
+        # byte-identical to its banked one (the golden-equivalence proof cares).
+        state["inventory"] = [[item, count] for item, count in sf.inventory]
+        state["inventory_tick"] = sf.inventory_tick
     return {
         "tick_range": list(ev.tick_range),
         "a_hat": ev.a_hat.value, "a_hat_conf": ev.a_hat_conf, "idle": ev.idle, "scored": ev.scored,
         "event_ids": list(ev.event_ids),
-        "state_feats": {
-            "held_item": sf.held_item, "hotbar": list(sf.hotbar), "pos_delta": list(sf.pos_delta),
-            "yaw_delta": sf.yaw_delta, "pitch_delta": sf.pitch_delta, "recent_actions": list(sf.recent_actions),
-        },
+        "state_feats": state,
         "focus": {"block": None if f.block is None else [f.block.x, f.block.y, f.block.z],
                   "dwell_ticks": f.dwell_ticks},
         "h2d": list(ev.h2d) if ev.h2d is not None else None,
@@ -113,15 +119,19 @@ def fused_to_dict(fused) -> dict:
     read this. The B1 channels ride along in full; per_goal/global keep B2's form.
     """
     sf, f, g = fused.state_feats, fused.focus, fused.global_feats
+    state = {
+        "held_item": sf.held_item, "hotbar": list(sf.hotbar), "pos_delta": list(sf.pos_delta),
+        "yaw_delta": sf.yaw_delta, "pitch_delta": sf.pitch_delta, "recent_actions": list(sf.recent_actions),
+    }
+    if sf.inventory is not None:
+        state["inventory"] = [[item, count] for item, count in sf.inventory]
+        state["inventory_tick"] = sf.inventory_tick
     return {
         "tick": fused.tick,
         "event_ids": list(fused.event_ids),
         "a_hat": fused.a_hat.value,
         "idle": fused.idle,
-        "state_feats": {
-            "held_item": sf.held_item, "hotbar": list(sf.hotbar), "pos_delta": list(sf.pos_delta),
-            "yaw_delta": sf.yaw_delta, "pitch_delta": sf.pitch_delta, "recent_actions": list(sf.recent_actions),
-        },
+        "state_feats": state,
         "focus": {"block": None if f.block is None else [f.block.x, f.block.y, f.block.z],
                   "dwell_ticks": f.dwell_ticks},
         "global": {

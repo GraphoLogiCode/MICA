@@ -8,6 +8,13 @@
     # (relocate + bank + gate + run_d1 --pixels + run_d2 --h3d + inspect; label later)
     python scripts/after_game.py --session fabric-... --evidence-only
 
+    # a queue of labels staged by the labeling tool — ONE matcher run for all of them
+    python scripts/after_game.py --batch after_session_tool/staged_labels.json
+
+    # declare what you're building (newest capture, or --session) — NOT a label:
+    # it feeds eval + material planning only, never the belief (D7)
+    python scripts/after_game.py --declare infrastructure/bridge
+
     # catch up a stack of already-captured games (labels come from labels.json)
     python scripts/after_game.py --all
 
@@ -54,6 +61,12 @@ _RAW = session_store.RAW_ROOT
 _LABELS = os.path.join(_RAW, "labels.json")
 _LEDGER = os.path.join(_RAW, "cascade_status.json")
 _SOURCE_B_REPORT = os.path.join(os.path.dirname(_RAW), "scripted", "source_b_report.json")
+# Declared build targets live in their OWN file, never labels.json: presence of a
+# session id in labels.json means "labeled" to the whole backlog logic, and a
+# declaration is not a label. It is also quarantined by design (D7): evidence
+# builders, trainers, and heads never open this file — it feeds only eval,
+# material planning, and the belief-vs-declaration diagnostic.
+_DECLARED = os.path.join(_RAW, "declared_targets.json")
 
 
 # ----------------------------------------------------------------- small helpers
@@ -143,6 +156,28 @@ def _upsert_label(session_id: str, goal: str, subtype: str, note: str) -> None:
     os.replace(tmp, _LABELS)
 
 
+def load_declared() -> dict:
+    """Every declared build target, by session id (empty when none declared yet)."""
+    try:
+        with open(_DECLARED, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def declare_target(session_id: str, goal: str, subtype: str) -> None:
+    """Record what the builder SAYS they are building — before, during, or after
+    play. Re-declaring overwrites. This never touches labels.json."""
+    declared = load_declared()
+    declared[session_id] = {"goal": goal, "subtype": subtype.strip().lower(),
+                            "declared_when": time.strftime("%Y-%m-%d %H:%M")}
+    tmp = _DECLARED + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(declared, handle, indent=1)
+    os.replace(tmp, _DECLARED)
+    print(f"declared target for {session_id}: {goal}/{subtype.strip().lower()}")
+
+
 def _verdict_for(session_id: str) -> dict | None:
     """This session's matcher verdict, read from the freshly written labeling report.
 
@@ -222,6 +257,24 @@ def _prior_report(session_id: str) -> dict | None:
         return json.load(handle)
 
 
+def _evidence_regenerated(session_id: str) -> bool:
+    """True when the offline regen is RECORDED for this session and its evidence
+    files exist — the proof that labeling may proceed without redoing the GPU work.
+    The marker matters, not bare file existence: live-written (possibly quarantined)
+    evidence must never be labeled against by accident. Reports from before the
+    marker existed qualify through their verdict: a matcher verdict can only have
+    been computed after a full regen."""
+    prior = _prior_report(session_id)
+    regen_recorded = prior is not None and (
+        prior.get("evidence_ready")
+        or (prior.get("gate_file_checks") == "PASS"
+            and not prior.get("structure_quarantined")
+            and prior.get("verdict") is not None))
+    return (regen_recorded
+            and os.path.exists(session_store.session_file(session_id, ".evidence2d.jsonl"))
+            and os.path.exists(session_store.session_file(session_id, ".evidence3d.jsonl")))
+
+
 def _write_inspect(session_id: str, gate_ok: bool, quarantined: bool,
                    verdict: dict | None, awaiting_label: bool = False) -> None:
     directory = session_store.session_dir(session_id)
@@ -277,20 +330,8 @@ def process_one(session_id: str, goal: str | None, subtype: str | None, no_vlm: 
     _bank_quarantined_live(session_id)
     jsonl = session_store.session_jsonl(session_id)
 
-    # A previous run's session_report.json is the proof the offline regen already
-    # happened — the marker, not bare file existence, because live-written
-    # (possibly quarantined) evidence must never be labeled against by accident.
-    # Reports from before the marker existed qualify through their verdict: a
-    # matcher verdict can only have been computed after a full regen.
     prior = _prior_report(session_id)
-    regen_recorded = prior is not None and (
-        prior.get("evidence_ready")
-        or (prior.get("gate_file_checks") == "PASS"
-            and not prior.get("structure_quarantined")
-            and prior.get("verdict") is not None))
-    evidence_done = (not redo_evidence and regen_recorded
-                     and os.path.exists(session_store.session_file(session_id, ".evidence2d.jsonl"))
-                     and os.path.exists(session_store.session_file(session_id, ".evidence3d.jsonl")))
+    evidence_done = not redo_evidence and _evidence_regenerated(session_id)
     if evidence_done:
         print("  evidence already regenerated offline — skipping gate/run_d1/run_d2"
               " (--redo-evidence forces the full regen)")
@@ -300,7 +341,15 @@ def process_one(session_id: str, goal: str | None, subtype: str | None, no_vlm: 
             _write_inspect(session_id, gate_ok=False, quarantined=False, verdict=None)
             return {"session": session_id, "ok": False, "reason": "gate fail"}
 
-        _run("run_d1.py", jsonl, "--pixels", "--overwrite")
+        if _run("run_d1.py", jsonl, "--pixels", "--overwrite") != 0:
+            # A dead d1 used to be swallowed here (only d2 was checked): the chain
+            # sailed on, stamped evidence_ready over a STALE evidence2d file, and
+            # shipped mismatched b1/b2 — found 2026-07-12 when the contested-pairs
+            # writer refused two such sessions. No report is written: the session
+            # stays honestly un-ready instead of ready-with-garbage.
+            print("  run_d1 exited non-zero — evidence NOT regenerated; fix the "
+                  "pixel pass (or the frames) and rerun")
+            return {"session": session_id, "ok": False, "reason": "run_d1 failed"}
         d2 = _run("run_d2.py", jsonl, "--h3d", "--overwrite")
         if d2 != 0:
             print("  run_d2 exited non-zero — STRUCTURE QUARANTINE (unrecoverable); skipping label")
@@ -342,6 +391,68 @@ def process_one(session_id: str, goal: str | None, subtype: str | None, no_vlm: 
     return {"session": session_id, "ok": True, "verdict": verdict}
 
 
+def process_batch(staged_path: str, no_vlm: bool) -> dict:
+    """Label a queue of sessions with ONE matcher run. The staged file is a JSON
+    list of {"session", "goal", "subtype"} (the labeling tool writes it).
+
+    Every queued session must already have its evidence regenerated (the rig's
+    evidence-only pass does that): a session that is not ready is REFUSED with a
+    printed reason, never silently sent through minutes of GPU regen. All accepted
+    labels go into labels.json first, then label_finished_builds.py runs once for
+    the whole queue — one model load instead of one per session — and each session
+    gets the same verdict + inspect report a single-session run would write."""
+    with open(staged_path, encoding="utf-8") as handle:
+        staged = json.load(handle)
+    accepted, refused = [], []
+    for entry in staged:
+        session_id = entry.get("session", "")
+        goal, subtype = entry.get("goal", ""), entry.get("subtype", "")
+        if not session_id or not goal or not subtype:
+            refused.append((session_id or "<missing id>",
+                            "entry is missing session/goal/subtype"))
+            continue
+        if not _wait_for_manifest(session_id):
+            refused.append((session_id, "manifest still provisional — is the game still open?"))
+            continue
+        _relocate(session_id)
+        adopt_agent_scans(session_id)
+        _bank_quarantined_live(session_id)
+        if not _evidence_regenerated(session_id):
+            refused.append((session_id, "evidence not regenerated yet — run "
+                            "--evidence-only on it first (or it is quarantined/gate-failed)"))
+            continue
+        accepted.append((session_id, goal, subtype))
+    for session_id, reason in refused:
+        print(f"  REFUSED {session_id}: {reason}")
+    if not accepted:
+        print("batch: nothing labelable in the queue")
+        return {"ok": False, "labeled": [], "refused": refused}
+
+    for session_id, goal, subtype in accepted:
+        _upsert_label(session_id, goal, subtype,
+                      "processed by after_game.py --batch; matcher verdict below")
+    print(f"\nbatch: {len(accepted)} labels saved — running the matcher ONCE for all of them")
+    matcher_ok = _run("label_finished_builds.py", *(["--no-vlm"] if no_vlm else [])) == 0
+
+    failures = list(refused)
+    labeled = []
+    for session_id, goal, subtype in accepted:
+        verdict = _verdict_for(session_id) if matcher_ok else None
+        if verdict is None:
+            # Same honesty rule as the single-session path: a failed or skipping
+            # matcher must not masquerade as a completed label. The label itself
+            # is saved; the session stays awaiting a usable label run.
+            _write_inspect(session_id, gate_ok=True, quarantined=False, verdict=None,
+                           awaiting_label=True)
+            failures.append((session_id,
+                             "matcher failed" if not matcher_ok else "matcher skipped it"))
+        else:
+            _write_inspect(session_id, gate_ok=True, quarantined=False, verdict=verdict)
+            labeled.append(session_id)
+    print(f"\nbatch done: {len(labeled)} labeled, {len(failures)} refused/failed")
+    return {"ok": not failures, "labeled": labeled, "refused": failures}
+
+
 def _backlog_sessions() -> tuple[list[str], list[str]]:
     """(labeled-and-processable, needs-a-builder-label). A session is in the backlog
     if it has a raw jsonl but no evidence yet — "processed" means perception ran
@@ -358,8 +469,15 @@ def _backlog_sessions() -> tuple[list[str], list[str]]:
             # Perception already ran — but an automation-processed session may still
             # be waiting for its builder label (evidence-only mode): surface it, and
             # complete it if the label has arrived in labels.json meanwhile.
+            #
+            # NO REPORT AT ALL also surfaces (fixed 2026-07-11): live-first sessions
+            # carry evidence from their first minute (run_live writes it during
+            # play), so "evidence but no report" just means the post-session chain
+            # hasn't finished — or died partway. Hiding those made every fresh
+            # session invisible to the tool until its report landed, and a session
+            # whose chain crashed stayed invisible forever.
             report = _prior_report(session_id)
-            if report and report.get("awaiting_label"):
+            if report is None or report.get("awaiting_label"):
                 (processable if session_id in labels else needs_label).append(session_id)
             continue
         (processable if session_id in labels else needs_label).append(session_id)
@@ -372,6 +490,12 @@ def main() -> int:
         return 0
 
     no_vlm = "--no-vlm" in sys.argv
+    staged_path = _flag("--batch")
+    if staged_path:
+        result = process_batch(staged_path, no_vlm)
+        print_readiness()
+        return 0 if result["ok"] else 1
+
     if "--all" in sys.argv:
         labels = _load_labels()
         processable, needs_label = _backlog_sessions()
@@ -397,6 +521,19 @@ def main() -> int:
             print("no capture found — play a game first, or pass --session")
             return 1
         target = os.path.basename(target)[:-len(".jsonl")] if target.endswith(".jsonl") else target
+
+    declared = _flag("--declare")
+    if declared is not None:
+        # e.g. after_game.py --session fabric-... --declare infrastructure/bridge
+        # (no --session declares on the newest capture — mid-play declaration).
+        from mica.contracts.goals import GOALS
+        parts = declared.split("/", 1)
+        if len(parts) != 2 or parts[0] not in GOALS or not parts[1].strip():
+            print(f"--declare wants <category>/<subtype> with a real category "
+                  f"({', '.join(GOALS)}), e.g. habitation/house")
+            return 1
+        declare_target(target, parts[0], parts[1])
+        return 0
 
     evidence_only = "--evidence-only" in sys.argv
     redo_evidence = "--redo-evidence" in sys.argv

@@ -39,7 +39,7 @@ from mica.capture.pivot_builds import pivot_build                    # noqa: E40
 from mica.capture.scripted_goals import plan_variants                # noqa: E402
 from mica.capture.synthetic import generate_session                  # noqa: E402
 from mica.contracts.b1 import GOALS                                  # noqa: E402
-from mica.contracts.b3 import fuse, fuse_dicts                       # noqa: E402
+from mica.contracts.b3 import fuse, fuse_dicts, fuse_streams                       # noqa: E402
 from mica.data import vlm                                            # noqa: E402
 from mica.intent import arm1, heads_v0, heads_v1                     # noqa: E402
 from mica.intent.arm2 import Arm2                                    # noqa: E402
@@ -138,8 +138,7 @@ def _load_banked(directory: str, session_id: str):
     b2 = [json.loads(line) for line in
           open(os.path.join(directory, f"{session_id}.evidence3d.jsonl"), encoding="utf-8")
           if line.strip()]
-    scored = [record for record in b1 if record.get("scored")]
-    return [fuse_dicts(a, b) for a, b in zip(scored, b2)]
+    return fuse_streams(b1, b2, session_id)
 
 
 def _pivot_records(count: int):

@@ -84,7 +84,7 @@ def _main_real() -> int:
 
     import torch as th
 
-    from mica.contracts.b3 import fuse_dicts
+    from mica.contracts.b3 import fuse_dicts, fuse_streams
     from probe_h3d_linear import real_rows
     from run_tracker import real_labeled_sessions
 
@@ -100,8 +100,7 @@ def _main_real() -> int:
               open(meta[session_id]["b1"], encoding="utf-8") if line.strip()]
         b2 = [json_module.loads(line) for line in
               open(meta[session_id]["b2"], encoding="utf-8") if line.strip()]
-        scored = [record for record in b1 if record.get("scored")]
-        fused = [fuse_dicts(a, b) for a, b in zip(scored, b2)]
+        fused = fuse_streams(b1, b2, session_id)
         sessions.append((session_id, truth, fused))
 
     X = th.tensor([r[0] for r in rows])

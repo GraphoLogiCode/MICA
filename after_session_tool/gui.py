@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -68,8 +69,14 @@ class App:
         style = ttk.Style()
         if "clam" in style.theme_names():
             style.theme_use("clam")
+        # Grey chips for the roadmap styles the matcher's templates don't cover yet.
+        style.configure("Roadmap.TButton", foreground="#7a8591")
         self._sel: str | None = None                    # inbox selection
         self._hist_sel: str | None = None               # history selection
+        self._pending_snap: dict | None = None          # worker -> UI-thread handoff
+        self._refreshing = False
+        self._refresh_again = False
+        self.queue: list[dict] = []                     # staged batch labels
 
         nb = ttk.Notebook(root)
         self.nb = nb
@@ -100,6 +107,23 @@ class App:
         self._build_history()
         self.refresh_all()
         self._poll_jobs()
+        self._check_interpreter()
+
+    def _check_interpreter(self) -> None:
+        # Every job this window starts runs on THIS python (sys.executable). A
+        # machine with several pythons (a fresh 3.14 became the `py` default and
+        # broke evidence jobs with "No module named timm") makes that a silent
+        # trap — so say it loudly at startup instead of failing one job at a time.
+        import importlib.util
+        missing = [name for name in ("torch", "timm") if importlib.util.find_spec(name) is None]
+        if missing:
+            messagebox.showwarning(
+                "Wrong Python for the pipeline",
+                f"This window is running on {sys.executable}\n\n"
+                f"which lacks: {', '.join(missing)}.\n\n"
+                "Evidence and label jobs WILL fail on it. Close this window and "
+                "launch with the ML Python instead:\n\n"
+                "    py -3.12 after_session_tool\\gui.py")
 
     # ----------------------------------------------------------------- inbox
 
@@ -121,14 +145,33 @@ class App:
             self.tree.tag_configure(state, foreground=color)
         self.tree.pack(fill="both", expand=True, pady=(4, 0))
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
+
+        # The batch queue: stage several labels here, then run the matcher ONCE
+        # for all of them — one model load instead of one per session.
+        box = ttk.LabelFrame(left, text="Batch queue — one matcher run for all", padding=4)
+        box.pack(fill="x", pady=(8, 0))
+        self.queue_tree = ttk.Treeview(box, columns=("label",), show="tree headings",
+                                       height=4, selectmode="browse")
+        self.queue_tree.heading("#0", text="session")
+        self.queue_tree.heading("label", text="staged label")
+        self.queue_tree.column("#0", width=190)
+        self.queue_tree.column("label", width=140)
+        self.queue_tree.pack(fill="x")
+        row = ttk.Frame(box)
+        row.pack(fill="x", pady=(4, 0))
+        self.queue_vlm = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row, text="VLM cross-check", variable=self.queue_vlm).pack(side="left")
+        ttk.Button(row, text="Remove", command=self._queue_remove).pack(side="left", padx=6)
+        self.queue_btn = ttk.Button(row, text="Label all (0)", command=self._queue_run)
+        self.queue_btn.pack(side="left")
+
         pane.add(left, weight=1)
         self.inbox_detail = ScrollFrame(pane)
         pane.add(self.inbox_detail, weight=2)
 
-    def refresh_inbox(self) -> None:
+    def refresh_inbox(self, cards: list[dict]) -> None:
         keep = self._sel
         self.tree.delete(*self.tree.get_children())
-        cards = sessions.inbox()
         for c in cards:
             self.tree.insert("", "end", iid=c["sid"], text=c["sid"],
                              values=(_STATE_TEXT.get(c["state"], c["state"]),),
@@ -182,6 +225,7 @@ class App:
                       foreground="#4a5560").pack(anchor="w", pady=(6, 0))
 
         self._render_build(sid, view["pngs"], target)
+        self._render_declare(sid, view.get("declared"), target)
         self._render_verdict(verdict, target)
         self._render_job(view.get("job"), target)
         self._render_form(sid, state, view.get("label") or {}, target, allow_relabel, verdict)
@@ -231,6 +275,35 @@ class App:
         if pov:
             ttk.Button(buttons, text="Open frames",
                        command=lambda: self._open(sessions.frames_dir(sid))).pack(side="left", padx=6)
+
+    def _render_declare(self, sid, declared: dict | None, target) -> None:
+        """What the builder SAYS they are building. A declaration is not a label:
+        it feeds material planning and eval only — never the belief (D7)."""
+        box = ttk.LabelFrame(target, text="Declared target", padding=6)
+        box.pack(fill="x", pady=8)
+        goal_var = tk.StringVar(value=(declared or {}).get("goal", sessions.GOALS[0]))
+        subtype_var = tk.StringVar(value=(declared or {}).get("subtype", ""))
+        row = ttk.Frame(box)
+        row.pack(anchor="w")
+        ttk.Combobox(row, textvariable=goal_var, values=list(sessions.GOALS),
+                     state="readonly", width=16).pack(side="left")
+        ttk.Entry(row, textvariable=subtype_var, width=24).pack(side="left", padx=6)
+        ttk.Button(row, text="Declare",
+                   command=lambda: self._do_declare(sid, goal_var.get(),
+                                                    subtype_var.get())).pack(side="left")
+        note = (f'declared {declared.get("declared_when", "")} — used for material '
+                'planning and eval, never fed to the belief'
+                if declared else
+                "optional: say what you were building — feeds material planning and "
+                "eval, never the belief")
+        ttk.Label(box, foreground="#7a8591", wraplength=560, text=note).pack(anchor="w")
+
+    def _do_declare(self, sid, goal, subtype) -> None:
+        error = sessions.set_declared_target(sid, goal, subtype)
+        if error:
+            messagebox.showwarning("Declare", error)
+            return
+        self.refresh_all()
 
     def _render_verdict(self, verdict: dict | None, target) -> None:
         if not verdict:
@@ -283,11 +356,23 @@ class App:
         chips.grid(row=2, column=1, sticky="w")
 
         def rebuild_chips(*_a):
+            # Two groups: styles the matcher's templates recognize, and the wider
+            # documented styles (grey — fine as labels, agreement is category-level).
             for c in chips.winfo_children():
                 c.destroy()
-            for s in sessions.subtype_presets(goal_var.get()):
-                ttk.Button(chips, text=s, width=max(6, len(s)),
-                           command=lambda v=s: subtype_var.set(v)).pack(side="left", padx=1)
+            groups = [("matcher templates:", sessions.subtype_presets(goal_var.get()), "TButton"),
+                      ("more styles:", sessions.roadmap_presets(goal_var.get()), "Roadmap.TButton")]
+            for caption, values, chip_style in groups:
+                if not values:
+                    continue
+                ttk.Label(chips, text=caption, foreground="#7a8591").pack(anchor="w", pady=(3, 0))
+                row = None
+                for index, s in enumerate(values):
+                    if index % 5 == 0:               # wrap so long lists don't overflow
+                        row = ttk.Frame(chips)
+                        row.pack(anchor="w")
+                    ttk.Button(row, text=s, width=max(6, len(s)), style=chip_style,
+                               command=lambda v=s: subtype_var.set(v)).pack(side="left", padx=1, pady=1)
         goal_box.bind("<<ComboboxSelected>>", rebuild_chips)
         rebuild_chips()
 
@@ -301,9 +386,14 @@ class App:
                          command=lambda: self._do_label(sid, goal_var.get(),
                                                         subtype_var.get(), vlm_var.get()))
         btn.pack(side="left")
+        add = ttk.Button(buttons, text="Add to queue",
+                         command=lambda: self._queue_add(sid, goal_var.get(),
+                                                         subtype_var.get()))
+        add.pack(side="left", padx=6)
         if not can_label:
             btn.state(["disabled"])
-        if state == "unprocessed":
+            add.state(["disabled"])
+        if state in ("unprocessed", "processing"):
             ttk.Button(buttons, text="Process evidence",
                        command=lambda: self._do_process(sid)).pack(side="left", padx=6)
         ttk.Button(buttons, text="Skip", command=lambda: self._do_skip(sid)).pack(side="left", padx=6)
@@ -323,7 +413,11 @@ class App:
         elif state == "labeling":
             note = "Labeling is running in the background…"
         elif state == "processing":
-            note = "Evidence is being generated — it becomes labelable when that finishes."
+            note = ("Evidence exists but no session report yet — the rig's post-session "
+                    "chain is either still running (it becomes labelable when it "
+                    "finishes) or it died partway. If nothing changes in a few minutes, "
+                    "press Process evidence to redo it — but not while the rig is "
+                    "actively working on this session (two runs would race).")
         else:
             note = ""
         if note:
@@ -331,19 +425,61 @@ class App:
 
     # actions ---------------------------------------------------------------
 
-    def _do_label(self, sid, goal, subtype, vlm) -> None:
+    def _label_inputs_ok(self, goal, subtype) -> bool:
         # Say WHY a click did nothing instead of silently ignoring it.
         if not subtype.strip():
             messagebox.showwarning("Subtype needed",
-                                   "Type a subtype (e.g. 'crop field') before labeling.")
-            return
+                                   "Type a subtype (e.g. 'crop field') first.")
+            return False
         if goal not in sessions.GOALS:
             messagebox.showwarning("Goal needed", "Pick a goal from the dropdown.")
+            return False
+        return True
+
+    def _do_label(self, sid, goal, subtype, vlm) -> None:
+        if not self._label_inputs_ok(goal, subtype):
             return
         if not sessions.start_label_job(sid, goal, subtype.strip(), vlm):
             messagebox.showinfo("One at a time",
                                 "Another session's job is still running — it must "
                                 "finish first (the jobs share the pipeline's files).")
+        self.refresh_all()
+
+    # queue actions ----------------------------------------------------------
+
+    def _queue_render(self) -> None:
+        self.queue_tree.delete(*self.queue_tree.get_children())
+        for e in self.queue:
+            self.queue_tree.insert("", "end", iid=e["session"], text=e["session"],
+                                   values=(f'{e["goal"]}/{e["subtype"]}',))
+        self.queue_btn.configure(text=f"Label all ({len(self.queue)})")
+
+    def _queue_add(self, sid, goal, subtype) -> None:
+        if not self._label_inputs_ok(goal, subtype):
+            return
+        # Re-staging a session replaces its earlier entry (an edited label wins).
+        entry = {"session": sid, "goal": goal, "subtype": subtype.strip()}
+        self.queue = [e for e in self.queue if e["session"] != sid] + [entry]
+        self._queue_render()
+
+    def _queue_remove(self) -> None:
+        sel = self.queue_tree.selection()
+        if sel:
+            self.queue = [e for e in self.queue if e["session"] != sel[0]]
+            self._queue_render()
+
+    def _queue_run(self) -> None:
+        problem = sessions.batch_problem(self.queue)
+        if problem:
+            messagebox.showwarning("Queue not ready", problem)
+            return
+        if not sessions.start_batch_label_job(list(self.queue), self.queue_vlm.get()):
+            messagebox.showinfo("One at a time",
+                                "Another job is still running — it must finish "
+                                "first (the jobs share the pipeline's files).")
+            return
+        self.queue = []
+        self._queue_render()
         self.refresh_all()
 
     def _do_process(self, sid) -> None:
@@ -365,18 +501,19 @@ class App:
     # ----------------------------------------------------------------- status
 
     def _build_status(self) -> None:
-        self.status_body = ttk.Frame(self.tab_status, padding=16)
+        self.status_body = ScrollFrame(self.tab_status)
         self.status_body.pack(fill="both", expand=True)
 
-    def refresh_status(self) -> None:
-        for c in self.status_body.winfo_children():
+    def refresh_status(self, snap: dict) -> None:
+        body = self.status_body.inner
+        for c in body.winfo_children():
             c.destroy()
-        r = sessions.status()
-        ttk.Label(self.status_body, text="Cascade readiness",
+        r = snap["status"]
+        ttk.Label(body, text="Cascade readiness",
                   font=("Segoe UI", 14, "bold")).pack(anchor="w")
-        ttk.Label(self.status_body, font=("Segoe UI", 26, "bold"),
+        ttk.Label(body, font=("Segoe UI", 26, "bold"),
                   text=f'{r["agreed_captures_total"]}  ').pack(anchor="w", pady=(8, 0))
-        ttk.Label(self.status_body, foreground="#7a8591",
+        ttk.Label(body, foreground="#7a8591",
                   text="matcher-agreed captures").pack(anchor="w")
         if r["last_cascade"] == "never":
             since = f'{r["pairs_total"]} training pairs banked; no cascade recorded yet'
@@ -384,19 +521,48 @@ class App:
             since = (f'since the last cascade ({r["last_cascade"]}): '
                      f'{len(r["new_agreed_since_cascade"])} new agreed captures, '
                      f'+{r["new_pairs_since_cascade"]} pairs')
-        ttk.Label(self.status_body, text=since).pack(anchor="w", pady=(10, 6))
+        ttk.Label(body, text=since).pack(anchor="w", pady=(10, 6))
         ready = r["last_cascade"] == "never" or r["new_agreed_since_cascade"]
-        ttk.Label(self.status_body, foreground=("#1f7a3d" if ready else "#5a6570"),
+        ttk.Label(body, foreground=("#1f7a3d" if ready else "#5a6570"),
                   font=("Segoe UI", 11, "bold"),
                   text=("READY — the batch is worth a retrain" if ready
                         else "nothing new since the last cascade")).pack(anchor="w")
-        ttk.Label(self.status_body, foreground="#7a8591",
+        ttk.Label(body, foreground="#7a8591",
                   text="The cascade retrain stays a manual step. When ready, run in a terminal:"
                   ).pack(anchor="w", pady=(8, 4))
-        cmd = ttk.Entry(self.status_body, width=44)
+        cmd = ttk.Entry(body, width=44)
         cmd.insert(0, "python scripts/run_cascade_a.py")
         cmd.configure(state="readonly")
         cmd.pack(anchor="w")
+
+        # Which trained models are live on disk — the set a cascade replaces.
+        models = ttk.LabelFrame(body, text="Models on disk", padding=8)
+        models.pack(fill="x", pady=(16, 0))
+        for row in snap["models"]:
+            line = ttk.Frame(models)
+            line.pack(fill="x")
+            ttk.Label(line, text="present" if row["present"] else "MISSING", width=8,
+                      foreground=("#1f7a3d" if row["present"] else "#a12b2b")).pack(side="left")
+            ttk.Label(line, text=row["name"], width=28).pack(side="left")
+            ttk.Label(line, text=row["trained"] or "", width=17,
+                      foreground="#4a5560").pack(side="left")
+            ttk.Label(line, text=row["facts"], foreground="#7a8591").pack(side="left")
+
+        # Who feeds the next cascade and who doesn't — nothing unlabeled,
+        # skipped, quarantined, or contested can slip into a retrain unseen.
+        check = snap["checklist"]
+        pairs = sum(e["pairs"] for e in check["included"])
+        panel = ttk.LabelFrame(
+            body, text=(f'Cascade checklist — {len(check["included"])} sessions feed it '
+                        f'({pairs} pairs) · {len(check["excluded"])} excluded'), padding=8)
+        panel.pack(fill="x", pady=(16, 0))
+        for e in check["included"]:
+            ttk.Label(panel, foreground="#1f7a3d",
+                      text=f'IN   {e["sid"]}   {e["label"]}   ·   {e["pairs"]} pairs'
+                      ).pack(anchor="w")
+        for e in check["excluded"]:
+            ttk.Label(panel, foreground="#7a8591",
+                      text=f'out  {e["sid"]}   —   {e["reason"]}').pack(anchor="w")
 
     # ----------------------------------------------------------------- history
 
@@ -435,9 +601,8 @@ class App:
         self.hist_detail = ScrollFrame(pane)
         pane.add(self.hist_detail, weight=2)
 
-    def refresh_history(self) -> None:
+    def refresh_history(self, h: dict) -> None:
         keep = self._hist_sel
-        h = sessions.history()
         self.hist_labeled.delete(*self.hist_labeled.get_children())
         for e in h["labeled"]:
             v = e.get("verdict") or {}
@@ -472,9 +637,41 @@ class App:
     # ----------------------------------------------------------------- shared
 
     def refresh_all(self) -> None:
-        self.refresh_inbox()
-        self.refresh_status()
-        self.refresh_history()
+        # Gather everything in a worker thread — one pass over the pipeline's
+        # files — and render when it lands, so the window never blocks on IO.
+        # A request made during a running pass coalesces into exactly one
+        # follow-up pass instead of piling up.
+        if self._refreshing:
+            self._refresh_again = True
+            return
+        self._refreshing = True
+        threading.Thread(target=self._gather_snapshot, daemon=True).start()
+        self.root.after(60, self._check_snapshot)
+
+    def _gather_snapshot(self) -> None:
+        # Worker thread: no Tk calls here (they are only safe on the UI thread) —
+        # the result is handed off through an attribute the UI thread polls.
+        try:
+            self._pending_snap = sessions.snapshot()
+        except Exception as error:
+            self._pending_snap = {"error": str(error)}
+
+    def _check_snapshot(self) -> None:
+        snap = self._pending_snap
+        if snap is None:
+            self.root.after(60, self._check_snapshot)
+            return
+        self._pending_snap = None
+        self._refreshing = False
+        if snap.get("error"):
+            self.status_var.set(f"refresh failed: {snap['error']}")
+        else:
+            self.refresh_inbox(snap["inbox"])
+            self.refresh_status(snap)
+            self.refresh_history(snap["history"])
+        if self._refresh_again:
+            self._refresh_again = False
+            self.refresh_all()
 
     def _poll_jobs(self) -> None:
         # Drive the bottom activity bar from any running job, and refresh the view
@@ -489,9 +686,14 @@ class App:
         if running:
             sid, job = running
             elapsed = int(time.time() - job.get("started", time.time()))
-            what = ("processing evidence (gate + perception)"
-                    if job.get("kind") == "process" else "labeling — running the matcher")
-            self.status_var.set(f"{what}  ·  {sid}  ·  {elapsed}s elapsed")
+            if job.get("kind") == "batch":
+                what = "batch labeling — one matcher run"
+                where = f'{len(job.get("sessions", []))} sessions'
+            elif job.get("kind") == "process":
+                what, where = "processing evidence (gate + perception)", sid
+            else:
+                what, where = "labeling — running the matcher", sid
+            self.status_var.set(f"{what}  ·  {where}  ·  {elapsed}s elapsed")
             if not self._bar_running:
                 self.bar.pack(side="left", padx=10)
                 self.bar.start(12)

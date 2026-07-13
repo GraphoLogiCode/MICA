@@ -45,9 +45,12 @@ def shipped_model(tmp_path, monkeypatch):
         "vocab": list(vocab), "temperature_delib": 1.0, "temperature_heur": 1.0,
         "epsilon": 0.1, "lambda_g": 0.05, "lambda_z": 1.0,
     }), encoding="utf-8")
-    monkeypatch.setattr(heads_v1, "_WEIGHTS", str(weights))
-    monkeypatch.setattr(heads_v1, "_META", str(meta))
-    monkeypatch.setattr(heads_v1, "_cache", None)
+    # Since the TrainedHeads refactor (2026-07-12 comparison work) the paths live on
+    # the default instance; swap in a fresh one pointed at the tmp files.
+    test_heads = heads_v1.TrainedHeads()
+    test_heads._weights = str(weights)
+    test_heads._meta = str(meta)
+    monkeypatch.setattr(heads_v1, "_default", test_heads)
     return model
 
 

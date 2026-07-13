@@ -43,6 +43,34 @@ def test_clean_pairs_load_and_carry_labels(tmp_path):
     assert all(a.progress <= b.progress for a, b in zip(samples, samples[1:]))
 
 
+def test_fuse_streams_refuses_mismatched_counts():
+    # The 210003 lesson (2026-07-12): bare zip silently truncated a broken session
+    # inside every eval for a week. fuse_streams must refuse loudly, naming the
+    # session — and round-trip matched streams unchanged.
+    from mica.contracts.b3 import fuse_streams
+
+    pairs = _pair_lines()
+    b1 = [p["b1"] for p in pairs]
+    b2 = [p["b2"] for p in pairs]
+    fused = fuse_streams(b1, b2, "pen-test")
+    assert len(fused) == len(b2)                      # matched streams fuse fully
+    with pytest.raises(ValueError, match="pen-test.*B1.*B2"):
+        fuse_streams(b1, b2[:-1], "pen-test")         # one missing record -> loud
+
+
+def test_contested_suffix_is_invisible_to_the_production_loader(tmp_path, monkeypatch):
+    # The 2026-07-12 comparison experiment writes contested pairs to their own
+    # suffix. The production loader must never even OPEN such a file — proven by
+    # planting one full of garbage that would raise if read — while the opt-in
+    # loader must be the one that reads it (and therefore raises on the garbage).
+    monkeypatch.setattr(training_pairs, "_RAW", str(tmp_path))
+    (tmp_path / "fabric-x.source_b_contested.jsonl").write_text(
+        "NOT JSON — reading me is a bug in the default path\n", encoding="utf-8")
+    assert training_pairs.load_source_b() == []          # never touched the file
+    with pytest.raises(json.JSONDecodeError):
+        training_pairs.load_source_b_contested()          # the opt-in loader does
+
+
 def test_join_mismatch_refused(tmp_path):
     pairs = _pair_lines()
     pairs[0]["b2"]["tick"] += 1                       # no longer the same correction

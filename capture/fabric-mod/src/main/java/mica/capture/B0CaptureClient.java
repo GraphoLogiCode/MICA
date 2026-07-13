@@ -174,6 +174,7 @@ public class B0CaptureClient implements ClientModInitializer {
         long readbackTotalNs = 0;
         long lastReadbackNs = 0;
         int frameCount = 0;
+        String lastInventoryJson = null;   // last written full-inventory sample (change check)
         final Queue<JsonObject> eventQueue = new ConcurrentLinkedQueue<>();
         // Counts what THIS recorder records — a change the hooks never see is invisible
         // to it. The manifest's declared_event_count therefore proves the recorder agrees
@@ -287,6 +288,15 @@ public class B0CaptureClient implements ClientModInitializer {
         c.addProperty("held_item", itemId(player.getMainHandItem()));
         c.add("hotbar", hotbar(player));
         c.addProperty("gui_open", client.screen != null);
+        // Full inventory, written SPARSELY: once a second and whenever the counts
+        // change. Most ticks carry no inventory key at all — the mind side treats
+        // an absent sample like the pixel channels (optional, carry the last one).
+        JsonArray inventory = inventoryCounts(player);
+        String inventoryJson = inventory.toString();
+        if (t % 20 == 0 || !inventoryJson.equals(state.lastInventoryJson)) {
+            c.add("inventory", inventory);
+            state.lastInventoryJson = inventoryJson;
+        }
         packet.add("client", c);
 
         JsonObject s = new JsonObject();
@@ -724,6 +734,32 @@ public class B0CaptureClient implements ClientModInitializer {
         return hb;
     }
 
+    // The player's whole inventory as [item, count] pairs — main (hotbar included)
+    // plus offhand, empties skipped, counts aggregated per item id, sorted so the
+    // same stock always serializes to the same string (the change check compares
+    // strings). Armor is skipped: it is never building material.
+    private JsonArray inventoryCounts(LocalPlayer player) {
+        Map<String, Integer> counts = new java.util.TreeMap<>();
+        for (ItemStack stack : player.inventory.items) {
+            if (stack == null || stack.isEmpty()) continue;
+            String id = Registry.ITEM.getKey(stack.getItem()).toString();
+            counts.merge(id, stack.getCount(), Integer::sum);
+        }
+        for (ItemStack stack : player.inventory.offhand) {
+            if (stack == null || stack.isEmpty()) continue;
+            String id = Registry.ITEM.getKey(stack.getItem()).toString();
+            counts.merge(id, stack.getCount(), Integer::sum);
+        }
+        JsonArray out = new JsonArray();
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            JsonArray pair = new JsonArray();
+            pair.add(entry.getKey());
+            pair.add(entry.getValue());
+            out.add(pair);
+        }
+        return out;
+    }
+
     private String itemId(ItemStack stack) {
         if (stack == null || stack.isEmpty()) return "minecraft:air";
         return Registry.ITEM.getKey(stack.getItem()).toString();
@@ -736,7 +772,7 @@ public class B0CaptureClient implements ClientModInitializer {
         m.addProperty("session_id", st.sessionId);
         m.addProperty("session_start_ms", st.sessionStartMs);
         m.addProperty("mc_version", "1.16.5");
-        m.addProperty("mod_version", "fabric-b0-0.0.7");   // 0.0.7: growth also fires off the EVENTS — the box never lags the build
+        m.addProperty("mod_version", "fabric-b0-0.0.8");   // 0.0.8: sparse full-inventory samples (D7); 0.0.7: growth fires off the EVENTS
         m.addProperty("event_schema_version", "1");   // B0 block-event schema version (jsonl_ingest reads this)
         // The frame settings this recording ran with — two captures with different
         // settings must be tellable apart from their manifests alone.

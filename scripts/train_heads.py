@@ -62,6 +62,12 @@ def _flag_value(name: str, default: int) -> int:
     return default
 
 
+def _flag_str(name: str, default: str) -> str:
+    if name in sys.argv:
+        return sys.argv[sys.argv.index(name) + 1]
+    return default
+
+
 def _featurize(samples, vocab, th, device):
     """Samples -> the tensor bundle the model consumes. The true-goal block is what
     Q_delib conditions on in training (NLL under the labeled goal)."""
@@ -230,13 +236,30 @@ def main() -> int:
 
     epochs = _flag_value("--epochs", 300)
     seed = _flag_value("--seed", 7)
+    # The comparison-experiment knobs (pre-registered 2026-07-12). All default OFF:
+    # a no-flag run is byte-for-byte the production training.
+    out_name = _flag_str("--out-name", "heads_v1")
+    reserved = [s for s in _flag_str("--extra-holdout", "").split(",") if s]
+    with_contested = "--include-contested-pairs" in sys.argv
     th.manual_seed(seed)
     device = "cuda" if th.cuda.is_available() else "cpu"
 
     print("loading verified training pairs (09-F1 asserted per sample) ...")
     source_a = training_pairs.load_source_a()
     source_b = training_pairs.load_source_b()
-    train, validation = training_pairs.split(source_a + source_b)
+    contested = training_pairs.load_source_b_contested() if with_contested else []
+    if with_contested:
+        print(f"  CONTESTED pairs included (comparison arm): {len(contested)} pairs "
+              f"from {len({s.session for s in contested})} sessions, builder labels as truth")
+    samples = source_a + source_b + contested
+    if reserved:
+        # Reserved sessions leave ENTIRELY — not even into validation, or the
+        # temperature/knob fits would be tuned on the comparison's shared eval set.
+        before = len(samples)
+        samples = [s for s in samples if s.session not in set(reserved)]
+        print(f"  reserved eval sessions excluded from train AND validation: "
+              f"{', '.join(reserved)} (-{before - len(samples)} pairs)")
+    train, validation = training_pairs.split(samples)
     vocab = training_pairs.held_item_vocab(train)
     held_sessions = sorted({s.session for s in validation})
     print(f"  source A: {len(source_a)} pairs   source B: {len(source_b)} pairs")
@@ -308,7 +331,10 @@ def main() -> int:
           f" holdout final accuracy {chosen['final_accuracy']})")
 
     os.makedirs(_MODELS, exist_ok=True)
-    np.savez(os.path.join(_MODELS, "heads_v1.npz"), **model.export_arrays())
+    meta_path = os.path.join(_MODELS, f"{out_name}.json")
+    report_path = (_REPORT if out_name == "heads_v1" else
+                   os.path.join(_ROOT, "capture", "raw", f"{out_name}_training_report.json"))
+    np.savez(os.path.join(_MODELS, f"{out_name}.npz"), **model.export_arrays())
     meta = {
         "goals": list(GOALS),
         "actions": [a.value for a in features.ACTION_ORDER],
@@ -322,23 +348,25 @@ def main() -> int:
         "trained": time.strftime("%Y-%m-%d %H:%M"),
         "data": {
             "source_a_pairs": len(source_a), "source_b_pairs": len(source_b),
+            "contested_pairs": len(contested),
             "train": len(train), "validation": len(validation),
             "held_out_sessions": held_sessions,
+            "reserved_sessions": reserved,
             "heur_samples": {"train": heur_train, "validation": heur_val,
                              "t_heur_fit": heur_fit_source},
         },
     }
-    with open(_META, "w", encoding="utf-8") as handle:
+    with open(meta_path, "w", encoding="utf-8") as handle:
         json.dump(meta, handle, indent=2)
     report = dict(meta)
     report["best_val_delib_nll"] = round(best_nll, 4)
     report["grid"] = grid_rows
     report["training_seconds"] = round(time.time() - started, 1)
-    with open(_REPORT, "w", encoding="utf-8") as handle:
+    with open(report_path, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
 
-    print(f"shipped models/heads_v1.npz + heads_v1.json"
-          f"   report -> {os.path.relpath(_REPORT, _ROOT)}")
+    print(f"shipped models/{out_name}.npz + {out_name}.json"
+          f"   report -> {os.path.relpath(report_path, _ROOT)}")
     print("  heads_v1 is OPT-IN (--heads v1 on run_tracker/calibration_report);"
           " v0 stays the baseline arm and the live default.")
     return 0

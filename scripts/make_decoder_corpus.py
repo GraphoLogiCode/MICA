@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 from mica.capture.scripted_goals import build_from_plan, plan_variants   # noqa: E402
 from mica.capture.synthetic import generate_session                      # noqa: E402
 from mica.contracts.b1 import GOALS                                      # noqa: E402
-from mica.contracts.b3 import fuse, fuse_dicts                           # noqa: E402
+from mica.contracts.b3 import fuse, fuse_dicts, fuse_streams                           # noqa: E402
 from mica.data import decoder_corpus, vlm                                # noqa: E402
 from mica.intent import arm1, heads_v1                                   # noqa: E402
 from mica.perception.evidence2d import evidence_stream                   # noqa: E402
@@ -89,8 +89,7 @@ def _load_banked_fused(session_id: str):
     b2 = [json.loads(line) for line in
           open(os.path.join(_SCRIPTED, f"{session_id}.evidence3d.jsonl"), encoding="utf-8")
           if line.strip()]
-    scored = [record for record in b1 if record.get("scored")]
-    return [fuse_dicts(a, b) for a, b in zip(scored, b2)]
+    return fuse_streams(b1, b2, session_id)
 
 
 def _banked_holdout_ids() -> list[str]:

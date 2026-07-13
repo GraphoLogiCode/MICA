@@ -47,11 +47,18 @@ def test_full_deliberate_build_reads_back_as_its_own_label():
 
 
 def test_taxonomy_and_templates_stay_coupled():
+    # v3 decouples instance names from subtypes: every instance's subtype must be a
+    # real taxonomy entry of its own category, names stay unique, and every category
+    # keeps at least one matcher-confirmable (template-backed) subtype. Not every
+    # subtype has an instance — definitions-only styles are the recorded gap.
     from mica.contracts.goals import TAXONOMY, category_of
-    from mica.perception.templates import TEMPLATES
+    from mica.perception.templates import TEMPLATES, template_backed
 
+    names = [t.name for templates in TEMPLATES.values() for t in templates]
+    assert len(names) == len(set(names))
     for goal, subtypes in TAXONOMY.items():
-        assert {t.name for t in TEMPLATES[goal]} == set(subtypes)
+        assert {t.subtype for t in TEMPLATES[goal]} <= set(subtypes)
+        assert template_backed(goal), f"{goal} has no matcher-confirmable subtype"
         for subtype in subtypes:
             assert category_of(subtype) == goal
 

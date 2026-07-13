@@ -82,6 +82,8 @@ def _client(raw) -> ClientObservation:
         held_item=raw.get("held_item"),
         hotbar=None if raw.get("hotbar") is None else tuple(raw["hotbar"]),
         gui_open=raw.get("gui_open"),
+        inventory=None if raw.get("inventory") is None else
+        tuple((str(item), int(count)) for item, count in raw["inventory"]),
     )
 
 

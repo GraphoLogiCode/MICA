@@ -32,6 +32,7 @@ import glob
 import io
 import json
 import os
+import random
 import shutil
 import sys
 import time
@@ -352,6 +353,19 @@ def _status_line(pipeline: LivePipeline, reorderer: PacketReorderer,
 _MAX_STATUS_CELLS = 512
 
 
+def _status_cell_sample(built, cap: int = _MAX_STATUS_CELLS) -> list[list[int]]:
+    """The built cells that fit one status write. Small builds go whole; a build
+    past the cap sends a FRESH RANDOM sample each write instead of the old sorted
+    prefix — the prefix made the agent's coverage patrol permanently blind to
+    every cell after the 512th, so large builds never got scanned beyond their
+    low-coordinate corner. Random per-write sampling lets the agent accumulate
+    the whole set over a few ~1 Hz writes, however big the build grows."""
+    cells = [list(cell) for cell in sorted(built)]
+    if len(cells) <= cap:
+        return cells
+    return random.sample(cells, cap)
+
+
 def _write_live_status(path: str, session_id: str, pipeline: LivePipeline,
                        head: LivePixelHead | None, d2=None, gate: dict | None = None) -> None:
     """The agent bridge: one small JSON snapshot, rewritten atomically ~1 Hz.
@@ -366,8 +380,8 @@ def _write_live_status(path: str, session_id: str, pipeline: LivePipeline,
         status["pixels"] = head.status()
     if d2 is not None:
         built = d2._world.built()
-        status["built_count"] = len(built)   # the uncapped truth; the list is display-capped
-        status["built_cells"] = [list(cell) for cell in sorted(built)][:_MAX_STATUS_CELLS]
+        status["built_count"] = len(built)   # the uncapped truth; the list is size-capped
+        status["built_cells"] = _status_cell_sample(built)
         region = d2._world.region
         status["region"] = [region.x0, region.y0, region.z0, region.x1, region.y1, region.z1]
     tmp = path + ".tmp"
@@ -525,10 +539,16 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
             # preload: the decoder loads NOW (before the socket attaches), never on
             # the pipeline thread mid-session — a lazy first-read load would stall
             # past the mod's drop-oldest buffer and open the session with a gap burst.
+            # --gather opts into the D5 §4 amendment (2026-07-10): the GATHER state
+            # can fire when materials are missing for the declared (or confidently
+            # inferred) target. Off by default so banked behavior is bit-unchanged.
+            gather = "--gather" in sys.argv
             gate_runner = LiveGateRunner(f"{base}.gate_trace.jsonl", params, demo=True,
-                                         preload=True)
+                                         preload=True, session_id=session_id,
+                                         gather=gather)
             print("  D5 gate: LIVE, decoder pre-warmed (demo config — observe/suggest/"
-                  "preview only; trace -> " + os.path.basename(base) + ".gate_trace.jsonl)")
+                  "preview only" + ("; GATHER enabled" if gather else "")
+                  + "; trace -> " + os.path.basename(base) + ".gate_trace.jsonl)")
         else:
             print("  D5 gate: OFF (no decoder/gate freeze on disk)")
     status_path = os.path.join(os.path.dirname(os.path.abspath(jsonl)), "live_status.json")

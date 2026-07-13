@@ -56,11 +56,95 @@ def test_inbox_excludes_skipped():
 
 # ---- taxonomy presets -------------------------------------------------------
 
-def test_subtype_presets_match_taxonomy():
-    assert "crop field" in sessions.subtype_presets("production")
+def test_subtype_presets_are_the_template_backed_v3_styles():
+    assert "crop_farm" in sessions.subtype_presets("production")
     assert sessions.subtype_presets("nonsense") == ()
     for goal in sessions.GOALS:
         assert isinstance(sessions.subtype_presets(goal), tuple)
+        assert sessions.subtype_presets(goal), f"{goal} has no matcher-confirmable style"
+
+
+def test_roadmap_presets_are_the_definitions_only_v3_styles():
+    # the two chip groups split the v3 taxonomy exactly: template-backed + the rest
+    for goal in sessions.GOALS:
+        backed, rest = sessions.subtype_presets(goal), sessions.roadmap_presets(goal)
+        assert not set(backed) & set(rest)
+        assert set(backed) | set(rest) == set(sessions.TAXONOMY[goal])
+    assert "mining_excavation" in sessions.roadmap_presets("production")
+    assert sessions.roadmap_presets("nonsense") == ()
+
+
+# ---- batch queue validation ---------------------------------------------------
+
+def test_batch_problem_accepts_a_good_queue():
+    queue = [{"session": "fabric-a", "goal": "defense", "subtype": "watchtower"},
+             {"session": "fabric-b", "goal": "production", "subtype": "crop field"}]
+    assert sessions.batch_problem(queue) is None
+
+
+def test_batch_problem_names_whats_wrong():
+    assert sessions.batch_problem([]) == "the queue is empty"
+    assert "goal" in sessions.batch_problem(
+        [{"session": "fabric-a", "goal": "castle", "subtype": "keep"}])
+    assert "subtype" in sessions.batch_problem(
+        [{"session": "fabric-a", "goal": "defense", "subtype": "  "}])
+    assert "twice" in sessions.batch_problem(
+        [{"session": "fabric-a", "goal": "defense", "subtype": "wall"},
+         {"session": "fabric-a", "goal": "defense", "subtype": "tower"}])
+    assert "session id" in sessions.batch_problem([{"goal": "defense", "subtype": "wall"}])
+
+
+# ---- cascade checklist: who feeds a retrain, who is excluded and why ----------
+
+def test_checklist_sorts_included_from_excluded():
+    labels = {"fabric-in": {}, "fabric-contested": {}, "fabric-discarded": {},
+              "scripted-x": {}}
+    rows = {
+        "fabric-in": {"label": {"kept": True, "goal": "defense", "subtype": "wall"},
+                      "agrees_with_builder": True, "pairs": 42},
+        "fabric-contested": {"label": {"kept": True, "goal": "habitation", "subtype": "cabin"},
+                             "agrees_with_builder": False},
+        "fabric-discarded": {"label": {"kept": False, "reason": "below threshold"},
+                             "agrees_with_builder": False},
+    }
+    states = {"fabric-unlabeled": "ready", "fabric-quar": "quarantined"}
+    got = sessions.checklist_from(labels, rows, states, ["fabric-skipped"])
+    assert got["included"] == [{"sid": "fabric-in", "label": "defense/wall", "pairs": 42}]
+    reasons = {e["sid"]: e["reason"] for e in got["excluded"]}
+    assert "CONTESTS" in reasons["fabric-contested"]
+    assert "below threshold" in reasons["fabric-discarded"]
+    assert "no label yet" in reasons["fabric-unlabeled"]
+    assert "quarantined" in reasons["fabric-quar"]
+    assert "skipped by you" in reasons["fabric-skipped"]
+    assert "scripted-x" not in reasons                  # scripted labels aren't sessions
+
+
+def test_checklist_flags_a_label_the_matcher_never_saw():
+    got = sessions.checklist_from({"fabric-new": {}}, {}, {}, [])
+    assert got["included"] == []
+    assert "matcher not run" in got["excluded"][0]["reason"]
+
+
+# ---- model status: present, dated, one line of facts --------------------------
+
+def test_model_status_reads_present_and_missing(tmp_path):
+    (tmp_path / "heads_v1.npz").write_bytes(b"x")
+    (tmp_path / "heads_v1.json").write_text(json.dumps(
+        {"trained": "2026-07-08 00:48", "temperature_delib": 1.4,
+         "temperature_heur": 1.4, "epsilon": 0.01, "lambda_g": 0.02}), encoding="utf-8")
+    (tmp_path / "gate_v1.json").write_text(json.dumps(
+        {"thresholds": {"theta_1": 0.35},
+         "fsm": {"theta_suggest": 0.3, "theta_place": 0.4}}), encoding="utf-8")
+    rows = {r["name"]: r for r in sessions.model_status(str(tmp_path))}
+    heads = rows["belief heads (heads_v1)"]
+    assert heads["present"] and heads["trained"] == "2026-07-08 00:48"
+    assert "1.4" in heads["facts"]
+    gate = rows["commit gate (gate_v1)"]
+    assert gate["present"] and "0.35" in gate["facts"]
+    decoder = rows["action decoder (decoder_v1)"]
+    assert not decoder["present"] and decoder["facts"] == "missing"
+    bank = rows["'before' bank (pre_cascade_a)"]
+    assert not bank["present"]
 
 
 # ---- pov_frame: highest-tick, not lexical -----------------------------------

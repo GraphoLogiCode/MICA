@@ -45,7 +45,7 @@ from make_decoder_corpus import _fused_for_build                      # noqa: E4
 from mica.capture import session_store                              # noqa: E402
 from mica.capture.jsonl_ingest import JsonlSource                     # noqa: E402
 from mica.contracts.b0 import BlockOp, is_agent_actor                 # noqa: E402
-from mica.contracts.b3 import fuse_dicts                              # noqa: E402
+from mica.contracts.b3 import fuse_dicts, fuse_streams                              # noqa: E402
 from mica.contracts.b6 import GateState                               # noqa: E402
 from mica.data import decoder_corpus                                  # noqa: E402
 from mica.decoder import context as context_builder                   # noqa: E402
@@ -84,8 +84,7 @@ def _load_banked_fused(session_id: str):
     b2 = [json.loads(line) for line in
           open(os.path.join(directory, f"{session_id}.evidence3d.jsonl"), encoding="utf-8")
           if line.strip()]
-    scored = [record for record in b1 if record.get("scored")]
-    return [fuse_dicts(a, b) for a, b in zip(scored, b2)]
+    return fuse_streams(b1, b2, session_id)
 
 
 def _world_track(packets):

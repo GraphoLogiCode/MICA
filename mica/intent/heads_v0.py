@@ -51,16 +51,21 @@ _DWELL_WEIGHT = 0.3     # a fixated crosshair leans toward acting on the spot
 
 # Which exact blocks signal each style — a hand full of oak fences is pen evidence the
 # pixel models never see crisply. Styles built from any solid block have no signature.
-_STYLE_MATERIALS: dict[str, frozenset[str]] = {
-    template.name: frozenset(required for required in template.cells.values()
-                             if required != REQ_SOLID)
-    for templates in TEMPLATES.values() for template in templates
-}
+# Keyed by taxonomy-v3 SUBTYPE (what the evidence's style read carries), pooling every
+# instance that realizes it — so "animal_husbandry" unions the fence pen's fences with
+# the post-and-rail pen's logs and slabs.
+_STYLE_MATERIALS: dict[str, frozenset[str]] = {}
+for _templates in TEMPLATES.values():
+    for _template in _templates:
+        signature = frozenset(required for required in _template.cells.values()
+                              if required != REQ_SOLID)
+        _STYLE_MATERIALS[_template.subtype] = (
+            _STYLE_MATERIALS.get(_template.subtype, frozenset()) | signature)
 # Category-level union, for when no style read exists (the structure-stripped arm):
 # knowing a category's material vocabulary is static goal knowledge, not runtime 3D.
 _CATEGORY_MATERIALS: dict[str, frozenset[str]] = {
     goal: frozenset(block for template in templates for block in
-                    _STYLE_MATERIALS[template.name])
+                    _STYLE_MATERIALS[template.subtype])
     for goal, templates in TEMPLATES.items()
 }
 

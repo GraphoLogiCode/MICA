@@ -23,6 +23,8 @@ class GateState(Enum):
     SUGGEST = "suggest"
     PREVIEW = "preview"                  # ghost hologram; nothing placed
     PLACE_LOW_RISK = "place_low_risk"    # reversible blocks only
+    GATHER = "gather"                    # fetch whitelisted materials (D5 §4 amendment
+                                         # 2026-07-10); config-disabled by default
     EXECUTE_CHUNK = "execute_chunk"      # in the enum, config-disabled in v1
     YIELD = "yield"                      # step back from the build region
 

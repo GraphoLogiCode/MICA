@@ -53,6 +53,13 @@ class StateFeats:
     yaw_delta: float                        # net turn (left/right)
     pitch_delta: float                      # net look (up/down)
     recent_actions: tuple[str, ...]         # the macro-actions just before this one
+    # The newest full-inventory sample taken AT OR BEFORE this record's window edge
+    # (D7 leakage rule: the count change caused by the action being scored must never
+    # appear in its own evidence). inventory_tick is the tick that sample was taken,
+    # kept so the leak rule is checkable per record, not just trusted. None on every
+    # capture from before the mod recorded inventories (2026-07-10).
+    inventory: tuple[tuple[str, int], ...] | None = None
+    inventory_tick: int | None = None
 
 
 @dataclass(frozen=True)

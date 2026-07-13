@@ -38,7 +38,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 from mica.contracts.b1 import GOALS, MacroAction             # noqa: E402
 from mica.capture import session_store                      # noqa: E402
-from mica.contracts.b3 import fuse_dicts                     # noqa: E402
+from mica.contracts.b3 import fuse_streams                   # noqa: E402
 from mica.intent.heads_v0 import likelihood                  # noqa: E402
 from mica.intent.tracker import (                            # noqa: E402
     TrackerParams, category_marginal, correct, predict, uniform_belief,
@@ -67,12 +67,10 @@ def _correction_points(directory: str, session_id: str, truth: str,
           open(_evidence(directory, session_id, ".evidence2d.jsonl"), encoding="utf-8")]
     b2 = [json.loads(line) for line in
           open(_evidence(directory, session_id, ".evidence3d.jsonl"), encoding="utf-8")]
-    scored = [record for record in b1 if record["scored"]]
     belief = uniform_belief()
     previous_tick = 0
     points, margins = [], []
-    for b1_record, b2_record in zip(scored, b2):
-        fused = fuse_dicts(b1_record, b2_record)             # the verified join
+    for fused in fuse_streams(b1, b2, session_id):           # counts asserted, joins verified
         dt = max(fused.tick - previous_tick, 1) / 20.0
         previous_tick = fused.tick
         belief = predict(belief, dt, params)
@@ -133,10 +131,14 @@ def main() -> int:
             # A session trained on v1 iff its pairs file exists AND it was not in the
             # training holdout (heads_v1.json pins that list). What remains is data
             # the model has never seen — the only rows a calibration CLAIM may cite.
+            # The pairs file lives in the dated session dir (flat only for legacy
+            # captures), so it is resolved through _evidence — the bare flat path
+            # matched nothing after the layout migration, which silently made
+            # "held-out" score every session, trained ones included.
             with open(os.path.join(_ROOT, "models", "heads_v1.json"), encoding="utf-8") as handle:
                 pinned_holdout = set(json.load(handle)["data"]["held_out_sessions"])
             trained = {sid for sid in labels
-                       if os.path.exists(os.path.join(_RAW, f"{sid}.source_b.jsonl"))
+                       if os.path.exists(_evidence(_RAW, sid, ".source_b.jsonl"))
                        and sid not in pinned_holdout}
             labels = {sid: meta for sid, meta in labels.items() if sid not in trained}
             print(f"held-out only: dropped training sessions {sorted(trained)}")

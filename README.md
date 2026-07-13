@@ -28,3 +28,19 @@ python scripts/make_proof_logs.py   # regenerate proof_logs/ (D0 "no log, not do
 Clean-code rules in `.agents/rules/research-code.md` apply. Indexing discipline
 from the math review: no variable named `t` — only `tick` and the evidence-step
 index `k`.
+
+## Backups
+
+The corpus (capture/raw + models + the research vault) is irreplaceable. One command
+copies it, additively, to a second disk:
+
+```
+backup-corpus.bat            REM default destination F:\MICA-backup
+backup-corpus.bat E:\backup  REM or anywhere else
+```
+
+To run it weekly, register once from an admin prompt (your click, not automated):
+
+```
+schtasks /Create /TN "MICA corpus backup" /SC WEEKLY /D SUN /ST 21:00 /TR "D:\2026projects\MICA\backup-corpus.bat"
+```

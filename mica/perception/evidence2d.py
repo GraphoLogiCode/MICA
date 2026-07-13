@@ -95,9 +95,12 @@ def _tick_behavior(packet: ObservationPacket, prev: ObservationPacket | None) ->
     return MacroAction.IDLE
 
 
-def _state_feats(window: list[ObservationPacket], recent: tuple[str, ...]) -> StateFeats:
+def _state_feats(window: list[ObservationPacket], recent: tuple[str, ...],
+                 inventory_sample: tuple[int, tuple] | None = None) -> StateFeats:
     """Symbolic state over the pre-action window: held item + hotbar at the last moment,
-    net movement/look across the window, and the macro-actions that came just before."""
+    net movement/look across the window, and the macro-actions that came just before.
+    `inventory_sample` is the (tick, items) full-inventory reading the stream picked
+    under the D7 leakage rule — always from BEFORE the run this record describes."""
     first, last = window[0], window[-1]
     pos_now, pos_then = last.server.player_pos, first.server.player_pos
     pos_delta = (
@@ -111,6 +114,8 @@ def _state_feats(window: list[ObservationPacket], recent: tuple[str, ...]) -> St
         yaw_delta=last.client.yaw - first.client.yaw,
         pitch_delta=last.client.pitch - first.client.pitch,
         recent_actions=recent,
+        inventory=inventory_sample[1] if inventory_sample else None,
+        inventory_tick=inventory_sample[0] if inventory_sample else None,
     )
 
 
@@ -166,6 +171,10 @@ class Evidence2DStream:
         self._history: deque[str] = deque(maxlen=_HISTORY_LEN)
         self._run: _OpenRun | None = None
         self._last_tick: int | None = None
+        # Sparse full-inventory samples (tick, items), oldest first. The mod writes one
+        # about every second and when the counts change; old captures have none. Pruned
+        # at each run open so it never grows past one run's worth.
+        self._inv_samples: list[tuple[int, tuple]] = []
 
     def feed(self, packet: ObservationPacket) -> tuple[Evidence2D, ...]:
         """Take the next tick's packet; return every record this tick lets us release."""
@@ -181,6 +190,8 @@ class Evidence2DStream:
             if oldest >= cutoff:
                 break
             del self._buffer[oldest]
+        if packet.client.inventory is not None:
+            self._inv_samples.append((packet.tick, packet.client.inventory))
 
         here = _tick_behavior(packet, self._prev)
         self._prev = packet
@@ -215,6 +226,15 @@ class Evidence2DStream:
         the live readout a safety gate needs for its idle/active decision."""
         return self._run.action if self._run is not None else None
 
+    def _inventory_before(self, limit: int) -> tuple[int, tuple] | None:
+        """The newest full-inventory sample taken at or before `limit` — the D7
+        leakage rule's lookup: a record may only see stock from before the run it
+        describes, so the count change its own action causes can never leak in."""
+        for tick, inv in reversed(self._inv_samples):
+            if tick <= limit:
+                return (tick, inv)
+        return None
+
     def _open_run(self, packet: ObservationPacket, here: MacroAction) -> list[Evidence2D]:
         """Start a new run at this tick and build its scored record from the window
         of ticks strictly before it (the snapshot rule)."""
@@ -227,6 +247,11 @@ class Evidence2DStream:
             events=[e.event_id for e in _human_events(packet)],
             recent=recent,
         )
+        # The run's pre-action inventory: everything older than it can go — every
+        # later record of this run uses this same sample or a newer pre-run one.
+        sample = self._inventory_before(packet.tick - 1)
+        if sample is not None:
+            self._inv_samples = [s for s in self._inv_samples if s[0] >= sample[0]]
         win = [self._buffer[t] for t in range(packet.tick - self._window, packet.tick)
                if t in self._buffer]
         if not win:
@@ -238,7 +263,7 @@ class Evidence2DStream:
             a_hat=here,
             a_hat_conf=_CONFIDENCE.get(here, _CONFIDENCE_DEFAULT),
             idle=here is MacroAction.IDLE,
-            state_feats=_state_feats(win, recent),
+            state_feats=_state_feats(win, recent, sample),
             focus=_focus(win),
             scored=True,
             event_ids=(),
@@ -277,7 +302,10 @@ class Evidence2DStream:
             a_hat=run.action,
             a_hat_conf=_CONFIDENCE.get(run.action, _CONFIDENCE_DEFAULT),
             idle=run.action is MacroAction.IDLE,
-            state_feats=_state_feats(win, run.recent),
+            # The context window overlaps the run itself, so its inventory is pinned
+            # to BEFORE the run began (review F1: the rule binds every record) —
+            # a mid-run sample would carry the ongoing action's own count changes.
+            state_feats=_state_feats(win, run.recent, self._inventory_before(run.t0 - 1)),
             focus=_focus(win),
             scored=False,
             event_ids=(),

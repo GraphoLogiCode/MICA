@@ -48,10 +48,12 @@ PROXIMAL_RADIUS = 4.0    # blocks, human body to agent target
 WORKSPACE_RADIUS = 2.0   # blocks, human focus block to agent target
 
 # The safety lattice, lowest (most defensive) first. Hysteresis compares ranks:
-# moving down is free, moving up costs M consecutive identical reads.
+# moving down is free, moving up costs M consecutive identical reads. GATHER sits
+# at PLACE_LOW_RISK's rank — both are autonomous world modification (the D5 §4
+# amendment, 2026-07-10), so gathering costs the same slow-earned authority.
 _LATTICE_RANK = {GateState.YIELD: 0, GateState.OBSERVE: 1, GateState.SUGGEST: 2,
                  GateState.PREVIEW: 3, GateState.PLACE_LOW_RISK: 4,
-                 GateState.EXECUTE_CHUNK: 5}
+                 GateState.GATHER: 4, GateState.EXECUTE_CHUNK: 5}
 
 
 class LatticeHysteresis:
@@ -91,6 +93,8 @@ class FsmConfig:
     workspace_radius: float = WORKSPACE_RADIUS
     place_low_risk_enabled: bool = True     # counterfactual: on; first live demo: OFF
     execute_chunk_enabled: bool = False     # v1: always off
+    gather_enabled: bool = False            # D5 §4 amendment 2026-07-10: off by default,
+                                            # so every banked behavior is bit-unchanged
 
     def __post_init__(self):
         if not self.theta_place > self.theta_suggest:
@@ -112,6 +116,11 @@ class GateRead:
     k_commit: int
     prefix_fully_reversible: bool | None          # None when nothing is committed
     nothing_to_do: bool = False                   # the decoder's named "done" signal
+    # The materials story (D7 §4/§6): the caller measured a shortfall for the target,
+    # and whether that target was DECLARED by the human (a declaration authorizes
+    # gathering outright; an inferred target must clear theta_place instead).
+    gather_wanted: bool = False
+    gather_declared: bool = False
 
 
 def _distance(a, b) -> float:
@@ -157,6 +166,17 @@ class GateFsm:
             candidate, why = GateState.OBSERVE, "human active (macro-action in progress)"
         elif gate_read.nothing_to_do:
             candidate, why = GateState.OBSERVE, "decoder proposes nothing (build looks done)"
+        elif (config.gather_enabled and gate_read.gather_wanted
+              and (gate_read.gather_declared or confidence >= config.theta_place)):
+            # The D5 §4 amendment (2026-07-10): fetch missing whitelisted materials.
+            # Full autonomy removed the asking, not the thresholds — an inferred
+            # target must clear the same bar placing does; a declared one is the
+            # human's own word. Same lattice rank as placing, so hysteresis makes
+            # gathering as slow to earn and as instant to surrender.
+            candidate, why = GateState.GATHER, (
+                "materials missing for the DECLARED target" if gate_read.gather_declared
+                else f"materials missing; conf {confidence:.3f} >= theta_place "
+                     f"{config.theta_place}")
         elif gate_read.k_commit == 0 or gate_read.target_cell is None:
             if confidence >= config.theta_suggest:
                 candidate, why = GateState.SUGGEST, (

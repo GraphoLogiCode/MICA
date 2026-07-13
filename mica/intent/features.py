@@ -108,6 +108,39 @@ def goal_dense(fused: FusedEvidence, goal: str) -> list[float]:
     ]
 
 
+INVENTORY_DIM = 4
+
+
+def inventory_dense(fused: FusedEvidence) -> tuple[list[float], float]:
+    """Goal-free inventory summary + presence flag — heads v2 ONLY (D7 §3).
+
+    NOT wired into the v1 vectors above: heads_v1 shipped against those exact
+    shapes, and a loaded model must never meet a feature it was not trained on.
+    The v2 trainer consumes this alongside a learned per-item embedding pooled by
+    log-count, and trains with held-item dropout (~30% of samples zero the held
+    embedding) so the full-inventory signal must carry weight — the D7 lever
+    against the held-item shortcut. The leakage rule is upstream: state_feats
+    carries only a sample from before the record's own run (asserted per record
+    by the validator and per sample by the v2 trainer, review F1).
+
+    Four scalars, squashed like every other channel: total stock, distinct item
+    kinds, placeable-block share, and how deep the largest single stack is."""
+    inventory = fused.state_feats.inventory
+    if inventory is None:
+        return [0.0] * INVENTORY_DIM, 0.0
+    total = sum(count for _, count in inventory)
+    blocks = sum(count for item, count in inventory
+                 if "sword" not in item and "pickaxe" not in item and "axe" not in item
+                 and "shovel" not in item and "hoe" not in item and "bucket" not in item)
+    largest = max((count for _, count in inventory), default=0)
+    return [
+        min(math.log1p(total) / 7.0, 1.0),
+        min(len(inventory), 27) / 27.0,
+        (blocks / total) if total else 0.0,
+        min(largest, 64) / 64.0,
+    ], 1.0
+
+
 def channel(vec: tuple[float, ...] | None, dim: int) -> tuple[list[float], float]:
     """A dense model channel plus its presence flag: zeros when the frozen model did
     not run (no frames in the window, nothing built yet). The flag lets the trained

@@ -86,9 +86,10 @@ def test_human_cell_tracking_ignores_the_agent(runner):
 # --- the place config (§9 amendment 2026-07-12) ---------------------------------
 
 def _peaked_belief(p_top=0.66, z1_share=0.6):
-    """A belief whose top goal clears the staircase's theta_1 while the discounted
-    conf = p_top * (1 - p_z1) stays BELOW theta_place — the exact regime the
-    declared-target route exists for."""
+    """A belief with a chosen top-goal mass and mode split. The defaults leave the
+    discounted conf BELOW theta_place (the dormant regime); the directive tests
+    pass a deliberative, confident shape instead — the confidence route is the
+    ONLY live licensing route since the declared route's retirement (2026-07-13)."""
     belief = {key: 0.0 for key in uniform_belief()}
     rest = (1.0 - p_top) / 8
     for key in belief:
@@ -117,7 +118,6 @@ def place_runner(tmp_path, monkeypatch):
                           session_id="test-session", place=True)
     gate.model = object()                    # already "loaded": skip the real torch load
     gate.origin = (0, 64, 0)
-    gate._declared = lambda: {"goal": "habitation", "subtype": "cabin"}
     # agent body well outside the human's proximal radius (the F4 veto is real:
     # putting it at the human's feet turns every read into YIELD)
     gate.materials_source = lambda: ({"oak_planks": 8}, {}, (18.0, 64.0, 6.0))
@@ -130,15 +130,28 @@ def _safe_status():
             "focus_block": None, "belief_snapshot_id": 100}
 
 
-def test_place_config_arms_the_gate_and_the_declared_route(place_runner):
+def test_place_config_arms_the_gate_but_never_the_declared_route(place_runner):
     assert place_runner.fsm.config.place_low_risk_enabled is True
-    assert place_runner.fsm.config.declared_place_enabled is True
+    # Retired 2026-07-13 (user decision): live behavior comes from inference
+    # alone — nothing may arm the declared route in a live runner.
+    assert place_runner.fsm.config.declared_place_enabled is False
     assert place_runner.fsm.config.execute_chunk_enabled is False
 
 
-def test_declared_route_emits_one_directive_then_suppresses_the_filled_cell(
+def test_a_mid_session_declaration_changes_nothing(place_runner):
+    # Even if a declaration exists for the session (entered by mistake), the
+    # retired route must stay dead: conf below theta_place means NO directive.
+    place_runner._declared = lambda: {"goal": "habitation", "subtype": "cabin"}
+    belief = _peaked_belief()                        # conf below theta_place
+    blocks = [place_runner.read(belief, fused_record(), _safe_status())
+              for _ in range(4)]
+    assert all(b["place"] is None for b in blocks)
+    assert all(b["state"] != "place_low_risk" for b in blocks)
+
+
+def test_confidence_route_emits_one_directive_then_suppresses_the_filled_cell(
         place_runner, tmp_path):
-    belief = _peaked_belief()
+    belief = _peaked_belief(p_top=0.8, z1_share=0.15)   # deliberative + confident
     blocks = [place_runner.read(belief, fused_record(), _safe_status())
               for _ in range(4)]
     # hysteresis (M=3) holds the first reads; the directive appears exactly once
@@ -147,7 +160,7 @@ def test_declared_route_emits_one_directive_then_suppresses_the_filled_cell(
     directive = directives[0]
     assert directive["block"] == "oak_planks"
     assert directive["cell"] == [1, 64, 1]           # origin (0,64,0) + (1,0,1)
-    assert directive["route"] == "declared"          # conf is below theta_place here
+    assert directive["route"] == "confidence"        # the only live route
     # the cell is remembered: later reads of the same proposal emit nothing
     later = place_runner.read(belief, fused_record(), _safe_status())
     assert later["place"] is None
@@ -158,7 +171,7 @@ def test_declared_route_emits_one_directive_then_suppresses_the_filled_cell(
     committed = [row for row in rows if row["committed_actions"]]
     assert len(committed) == 1
     action = committed[0]["committed_actions"][0]
-    assert action["reversible"] is True and action["route"] == "declared"
+    assert action["reversible"] is True and action["route"] == "confidence"
     assert committed[0]["belief_snapshot_id"] is not None
     assert any("already filled by the agent" in row["reason"] for row in rows)
 
@@ -169,7 +182,7 @@ def test_directive_ids_never_collide_across_runner_restarts(place_runner, tmp_pa
     # (review 2026-07-13 F2).
     from mica.intent import heads_v1
 
-    belief = _peaked_belief()
+    belief = _peaked_belief(p_top=0.8, z1_share=0.15)
     first_ids = [b["place"]["id"] for b in
                  (place_runner.read(belief, fused_record(), _safe_status())
                   for _ in range(4)) if b["place"]]
@@ -177,7 +190,6 @@ def test_directive_ids_never_collide_across_runner_restarts(place_runner, tmp_pa
                             session_id="test-session", place=True)
     second.model = object()
     second.origin = (0, 64, 0)
-    second._declared = place_runner._declared
     second.materials_source = place_runner.materials_source
     second._run_token = place_runner._run_token + 1   # a later start, deterministic
     second_ids = [b["place"]["id"] for b in
@@ -189,7 +201,7 @@ def test_directive_ids_never_collide_across_runner_restarts(place_runner, tmp_pa
 
 
 def test_place_directive_counts_into_the_materials_report(place_runner, tmp_path):
-    belief = _peaked_belief()
+    belief = _peaked_belief(p_top=0.8, z1_share=0.15)
     for _ in range(4):
         place_runner.read(belief, fused_record(), _safe_status())
     place_runner.close()

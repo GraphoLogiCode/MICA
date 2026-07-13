@@ -91,6 +91,22 @@ clean seconds. Two fixes shipped, one lesson stands:
   makes PLACE the candidate on every safe K≥1 read instead of only conf≥0.4 ones)
   and give the agent a real window — walk 4+ blocks away and stand still for ~5
   seconds. Shepherding it resets authority every time.
+  *(The declare half of this lesson is WITHDRAWN by Addendum 4 below — the window
+  half stands.)*
+
+**Addendum 4 (2026-07-13, late — user decision: the declared-place route is
+RETIRED for live sessions).** "No declaring in live session": live behavior must
+come from inference alone; declarations are post-session labels. The user caught a
+real drift — the original D7 §2 posture was tool-side/before-or-after-play with the
+honest note that it is "not available live mid-session," and both the gather
+amendment and yesterday's placement route had bent that toward live inputs. As
+built now: nothing arms `declared_place_enabled` (run_live `--place` = confidence
+route only, banner and docs updated); a mid-session declaration entered by mistake
+changes NOTHING (regression-tested); D7's consumer table strikes "placement
+authority" with the dated reversal; GATHER's declared branch is dormant under this
+rule (per D7 F2, gathering waits on heads v2 / a θ_gather freeze). Field basis that
+confidence-only suffices: 013710's 4 commits (conf 0.43–0.50) and 165730's 0.916
+peak. Runbook step 5 amended.
 
 **Still open before the first placement session:**
 - [ ] **P-1 — auditor B0 cross-check (review F4)**: committed directives vs the
@@ -107,9 +123,10 @@ clean seconds. Two fixes shipped, one lesson stands:
 **PLACEMENT RUNBOOK (supersedes the 07-06 demo runbook's placement half):** 1) stop
 the rig watcher; 2) launch the game, singleplayer + Open to LAN; 3) `python
 scripts/run_live.py --heads v1 --place` (sight the banner); 4) `node
-capture/mineflayer-bot/agent.js`; 5) declare the session's target in the
-after-session tool (declarations key by session id, live from game launch — the gate
-re-reads per second); 6) hand MICA_AI a stack of the build's block; 7) build, then
+capture/mineflayer-bot/agent.js`; 5) do NOT declare anything during the session
+(Addendum 4 — declarations are post-session labels; placement is licensed by the
+inferred conf ≥ θ_place alone); 6) hand MICA_AI a stack of the build's block when
+it asks — walk right up to it, it holds still while a request is open; 7) build, then
 step ≥4 blocks away and idle. Expect SUGGEST/PREVIEW first (M=3 hysteresis), then ONE
 block per read while the window stays safe; walking toward the agent or its target
 must drop it to YIELD the same read; "stop" halts everything. Afterward:

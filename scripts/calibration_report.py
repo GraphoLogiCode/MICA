@@ -113,11 +113,14 @@ def _reliability(points: list[tuple[float, bool]]) -> dict:
 def main() -> int:
     global likelihood
     real = "--real" in sys.argv
-    v1 = "--heads" in sys.argv and sys.argv[sys.argv.index("--heads") + 1] == "v1"
+    version = (sys.argv[sys.argv.index("--heads") + 1]
+               if "--heads" in sys.argv else None)
+    v1 = version is not None          # "trained heads in play" (v1 or v2)
     if v1:
-        from mica.intent import heads_v1
-        likelihood = heads_v1.likelihood
-        params = heads_v1.tracker_params()
+        from importlib import import_module
+        heads_module = import_module(f"mica.intent.heads_{version}")
+        likelihood = heads_module.likelihood
+        params = heads_module.tracker_params()
     else:
         params = TrackerParams()
     held_out = "--held-out" in sys.argv
@@ -135,7 +138,7 @@ def main() -> int:
             # captures), so it is resolved through _evidence — the bare flat path
             # matched nothing after the layout migration, which silently made
             # "held-out" score every session, trained ones included.
-            with open(os.path.join(_ROOT, "models", "heads_v1.json"), encoding="utf-8") as handle:
+            with open(os.path.join(_ROOT, "models", f"heads_{version or 'v1'}.json"), encoding="utf-8") as handle:
                 pinned_holdout = set(json.load(handle)["data"]["held_out_sessions"])
             trained = {sid for sid in labels
                        if os.path.exists(_evidence(_RAW, sid, ".source_b.jsonl"))
@@ -164,7 +167,7 @@ def main() -> int:
         by_goal[label["goal"]].extend(points)
 
     report = {
-        "heads": "trained v1" if v1 else "hand-coded v0",
+        "heads": f"trained {version}" if v1 else "hand-coded v0",
         "data": ("labeled real captures (truth = builder category)" if real
                  else "scripted corpus"),
         "params": {"lambda_g": params.lambda_g, "lambda_z": params.lambda_z,
@@ -183,7 +186,7 @@ def main() -> int:
                     "corrections (12-F8: trained heads must widen this)",
         },
     }
-    name = (f"calibration_report{'_real' if real else ''}{'_v1' if v1 else ''}"
+    name = (f"calibration_report{'_real' if real else ''}{f'_{version}' if v1 else ''}"
             f"{'_heldout' if held_out else ''}.json")
     out = os.path.join(directory, name)
     with open(out, "w", encoding="utf-8") as handle:

@@ -9,6 +9,41 @@
 
 ---
 
+# 🧪 HEADS V2 BUILT + EVALUATED — PRE-REGISTERED CRITERIA FAIL; BANKED AS THE NEGATIVE RESULT (2026-07-13/14, night)
+
+D8 implemented exactly as reviewed (all seven checklist fixes): per-stream late
+fusion (`adapter_v2.py`/`heads_v2.py`, channel partition structural + tested),
+event-gated GM-normalized C_γ-clipped goal readout on Arm 1's backbone (retrained
+class-balanced per F7c), held-item dropout + the pooled inventory channel (D7 §3),
+`train_heads_v2.py` with the full pinned fit (4 temperatures, offsets, 4,800-combo
+(w2,w3,γ,ε,λ) sweep on held-out filter NLPD). `--heads v2` wired into
+run_tracker/calibration_report (routing generalized to any heads_<version>).
+Checklist tests: `tests/test_heads_v2.py` (8).
+
+**Verdict (held-out real, 18 never-seen sessions): FAIL — banked as the
+pre-registered negative result.**
+- ECE **0.6888** vs v1's 0.2624 (criterion 2): 14,157 corrections stated ~0.99
+  confidence at 0.232 accuracy — the event-gate residual (D8 §3's own recorded
+  risk) measured biting: real sessions are mostly event corrections, and γ=1.0
+  let the readout saturate the recursion.
+- Fused final accuracy 0.179 vs floor 0.393 (criterion 4): FAIL. Chosen fusion
+  w2=0.0 (the dial measurably dropped the 2D stream), w3=0.5.
+- **The offsets fit degenerated and was auto-disabled**: the pinned split holds
+  out ONE real session (single-category) — the fit memorized its label (+6.1
+  decorative, NLL 0.002). New diversity guard in the trainer: offsets activate
+  only when the fit spans ≥3 categories / ≥2 sessions; shipped as zeros with the
+  reason printed. The same thin holdout is what let γ=1.0 win the sweep.
+- **The D8 build-order pin was vindicated**: "code only at the 16–20-agreed
+  milestone" — built early at 13 agreed (user decision), and the data said not
+  yet. Everything stands ready for the retry: one command against a richer
+  corpus; the increment-scored readout is the first design change to consider.
+- **Fallback clause adjudicated, not applied**: "3D-only becomes live default"
+  was written against pre-cascade numbers; post-cascade v1-fused (0.321) beats
+  3D-only (0.214), so the live default STAYS v1-fused (dated note in D8).
+- Artifacts: `belief_summary_real_v2.json`, `calibration_report_real_v2_heldout
+  .json`, `heads_v2_training_report.json`, `models/heads_v2.*` (opt-in only).
+- [ ] **mica-review of the v2 implementation math — owed next session.**
+
 # 🎯 PROOF-GRADE FIX: GATE READS OFF THE INGEST THREAD + MOD 0.0.9 BUFFER (2026-07-13, late night)
 
 **The measured cause of every gapped session** (stall meters across the last 10 live

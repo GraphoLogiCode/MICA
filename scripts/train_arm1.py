@@ -4,10 +4,12 @@
 
 Same data discipline as the Arm 3 heads (scripts/train_heads.py): the verified
 training pairs, the SAME pinned train/holdout split (mica/data/training_pairs.py),
-sessions weighted equally inside the loss, early stopping on held-out NLL, then a
-temperature fitted on the holdout so the stated confidence is post-hoc calibrated
-the same way Arm 3's heads were. Goal labels only — this arm predicts the goal
-directly; it never sees actions as targets and carries nothing between steps.
+sessions weighted equally AND classes balanced inside the loss (D8 review F7c —
+one recipe for this arm and the heads-v2 goal readout that shares this backbone),
+early stopping on held-out NLL, then a temperature fitted on the holdout so the
+stated confidence is post-hoc calibrated the same way Arm 3's heads were. Goal
+labels only — this arm predicts the goal directly; it never sees actions as
+targets and carries nothing between steps.
 
 Ships models/arm1.npz + models/arm1.json (weights, vocab, temperature, provenance).
 """
@@ -50,15 +52,20 @@ def _tensors(samples, vocab, th, device):
     import numpy as np
 
     counts: dict[str, int] = {}
+    category_counts: dict[str, int] = {}
     for s in samples:
         counts[s.session] = counts.get(s.session, 0) + 1
+        category_counts[s.goal] = category_counts.get(s.goal, 0) + 1
     held, dense, target, weight = [], [], [], []
     for s in samples:
         idx, vec = input_vector(s.fused, vocab)
         held.append(idx)
         dense.append(vec)
         target.append(GOALS.index(s.goal))
-        weight.append(1.0 / counts[s.session])
+        # Session-equal x CLASS-BALANCED (D8 review F7c: ONE recipe for Arm 1 and
+        # the v2 goal readout that shares this backbone) — the corpus's category
+        # skew must not become an implicit prior.
+        weight.append((1.0 / counts[s.session]) * (1.0 / category_counts[s.goal]))
     w = th.tensor(weight, dtype=th.float32, device=device)
     return {"held": th.tensor(held, dtype=th.long, device=device),
             "dense": th.tensor(np.stack(dense), dtype=th.float32, device=device),

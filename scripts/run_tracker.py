@@ -167,10 +167,13 @@ def _plot_traces(traces: dict, directory: str, suffix: str) -> str:
 def main() -> int:
     global likelihood
     real = "--real" in sys.argv
-    v1 = "--heads" in sys.argv and sys.argv[sys.argv.index("--heads") + 1] == "v1"
+    version = (sys.argv[sys.argv.index("--heads") + 1]
+               if "--heads" in sys.argv else None)
+    v1 = version is not None          # "trained heads in play" (v1 or v2)
     if v1:
-        from mica.intent import heads_v1
-        likelihood = heads_v1.likelihood
+        from importlib import import_module
+        heads_module = import_module(f"mica.intent.heads_{version}")
+        likelihood = heads_module.likelihood
     if real:
         labels = real_labeled_sessions()
         if not labels:
@@ -184,8 +187,7 @@ def main() -> int:
         with open(labels_path, encoding="utf-8") as handle:
             labels = json.load(handle)
     if v1:
-        from mica.intent import heads_v1
-        params = heads_v1.tracker_params()   # the jointly-fitted knobs, or none of it
+        params = heads_module.tracker_params()   # the jointly-fitted knobs, or none of it
     else:
         params = TrackerParams()
 
@@ -210,7 +212,7 @@ def main() -> int:
                  "floor_final_correct": floor_calls[-1] == label["goal"]}
         results.append(entry)
         if trace is not None:
-            suffix = "v1" if v1 else "v0"
+            suffix = version if v1 else "v0"
             trace_path = os.path.join(directory, f"{session_id}.belief_trace_{suffix}.jsonl")
             with open(trace_path, "w", encoding="utf-8") as handle:
                 for row in trace:
@@ -230,7 +232,7 @@ def main() -> int:
     summary = {
         "params": {"lambda_g": params.lambda_g, "lambda_z": params.lambda_z,
                    "epsilon": params.epsilon,
-                   "heads": "trained v1" if v1 else "hand-coded v0"},
+                   "heads": f"trained {version}" if v1 else "hand-coded v0"},
         "data": ("labeled real captures (truth = builder category; quarantined excluded)"
                  if real else "scripted corpus (generator ground truth)"),
         "sessions": len(results),
@@ -243,12 +245,12 @@ def main() -> int:
                                  "mean_sustained_from": round(floor_early, 3)},
         "per_session": results,
     }
-    name = f"belief_summary{'_real' if real else ''}{'_v1' if v1 else ''}.json"
+    name = f"belief_summary{'_real' if real else ''}{f'_{version}' if v1 else ''}.json"
     out = os.path.join(_RAW if real else _CORPUS, name)
     with open(out, "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2)
 
-    print(f"belief tracker ({'trained heads v1' if v1 else 'hand-coded heads v0'})"
+    print(f"belief tracker ({f'trained heads {version}' if v1 else 'hand-coded heads v0'})"
           f" over {len(results)} {'REAL' if real else 'scripted'} sessions - three arms")
     print(f"  final accuracy:   fused {fused_acc:.3f}   3D-only {no_b_acc:.3f}"
           f"   2D-only {no_s_acc:.3f}   floor {floor_acc:.3f}")
@@ -260,7 +262,7 @@ def main() -> int:
           f" {fused_acc - no_b_acc:+.3f} accuracy")
     print(f"  handoff verified per record; invariants held every step  ->  {os.path.basename(out)}")
     if traces:
-        plot = _plot_traces(traces, _RAW if real else _CORPUS, "v1" if v1 else "v0")
+        plot = _plot_traces(traces, _RAW if real else _CORPUS, version if v1 else "v0")
         print(f"  belief traces written per session (+ {os.path.basename(plot)})")
     return 0
 

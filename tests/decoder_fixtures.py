@@ -36,15 +36,16 @@ def toy_placements() -> tuple[ScriptedPlacement, ...]:
 
 
 def fused_record(tick: int = 100, built_count: int = 8,
-                 centroid=(2.0, 64.0, 2.0)) -> FusedEvidence:
-    """One well-formed fused record, symbolic channels only (like scripted data)."""
+                 centroid=(2.0, 64.0, 2.0), event_ids=(1,)) -> FusedEvidence:
+    """One well-formed fused record, symbolic channels only (like scripted data).
+    event_ids=() makes it a context-style correction (the heads-v2 event gate)."""
     per_goal = {
         g: PerGoalStructure(comp=0.5, edit_distance=5, fit=0.5, pose=Pose(0, 0, 0),
                             subtype=_SUBTYPE_OF[g], delta_comp=0.0)
         for g in GOALS
     }
     return FusedEvidence(
-        tick=tick, event_ids=(1,), a_hat=MacroAction.PLACE, idle=False,
+        tick=tick, event_ids=tuple(event_ids), a_hat=MacroAction.PLACE, idle=False,
         state_feats=StateFeats(held_item=_BLOCK, hotbar=(_BLOCK,),
                                pos_delta=(0.0, 0.0, 0.0), yaw_delta=0.0,
                                pitch_delta=0.0, recent_actions=("place", "idle")),

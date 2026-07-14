@@ -72,7 +72,8 @@ const SCAN_COLS = 32;              // rays across ±45° horizontal
 const SCAN_ROWS = 18;              // rays across ±35° vertical (70° FOV)
 const SCAN_H_HALF = Math.PI / 4;   // 90° horizontal spread (16:9 at 70° vertical)
 const SCAN_V_HALF = (35 * Math.PI) / 180;
-const SCAN_RANGE = 32;             // blocks; matches the far edge of a build region
+const SCAN_RANGE_MIN = 32;         // blocks; the original fixed range (small builds)
+const SCAN_RANGE_MAX = 96;         // rays stay cheap; beyond this the grid is too sparse
 const SCAN_EVERY_MS = 250;         // 4 Hz, alongside the follow/gaze loops
 const EYE_HEIGHT = 1.62;
 
@@ -862,10 +863,27 @@ function start(port) {
   // Sweep a fixed ray grid over the first-person frustum from the live eye pose.
   // Every ray stops at the first block it hits (real occlusion); cells never
   // seen before are appended to the scan file with the pose that saw them.
+  // Range is ADAPTIVE (user decision 2026-07-13): the old fixed 32 blocks went
+  // blind past the far edge of a grown capture region — the range now follows
+  // the region's own diagonal (the mind publishes it in live_status), clamped so
+  // rays stay cheap. The ray BUDGET stays fixed: at long range the grid is
+  // sparser per block, and the coverage patrol closes that by walking nearer —
+  // coverage converges by movement, not by ray spam.
+  function scanRange() {
+    const region = liveStatus && liveStatus.region;
+    if (!region) return SCAN_RANGE_MIN;
+    const dx = region[3] - region[0];
+    const dy = region[4] - region[1];
+    const dz = region[5] - region[2];
+    const diagonal = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    return Math.max(SCAN_RANGE_MIN, Math.min(SCAN_RANGE_MAX, Math.ceil(diagonal) + 8));
+  }
+
   function scanTick() {
     if (agentState !== 'present' || !bot.entity || !bot.entity.position) return;
     const e = bot.entity;
     const eye = e.position.offset(0, EYE_HEIGHT, 0);
+    const range = scanRange();
     const found = [];
     for (let col = 0; col < SCAN_COLS; col++) {
       const yaw = e.yaw + (col / (SCAN_COLS - 1) - 0.5) * 2 * SCAN_H_HALF;
@@ -876,7 +894,7 @@ function start(port) {
                              -Math.cos(yaw) * Math.cos(pitch));
         let hit = null;
         try {
-          hit = bot.world.raycast(eye, dir, SCAN_RANGE);
+          hit = bot.world.raycast(eye, dir, range);
         } catch (err) { /* a chunk mid-load: this ray just misses */ }
         if (!hit || !hit.position || hit.name === 'air') continue;
         const p = hit.position;

@@ -108,6 +108,25 @@ def goal_dense(fused: FusedEvidence, goal: str) -> list[float]:
     ]
 
 
+# --- the heads-v2 channel partition (D8 §2, review F5) --------------------------
+# Each stream head reads ONLY its own provenance: a channel reaching both heads
+# would be counted w2+w3 times by the fused product — the quiet version of note
+# 03's correlated-evidence anti-pattern. goal_dense splits accordingly; the
+# structural test asserts the two halves recompose the v1 vector exactly.
+GOAL_3D_DIM = 5    # fit, comp, fit*comp, delta_comp, edit_distance — structure provenance
+GOAL_2D_DIM = 2    # s_goal cosine + its presence flag — computed from frames
+
+
+def goal_dense_3d(fused: FusedEvidence, goal: str) -> list[float]:
+    """The 3D head's g-indexed block: the per-goal STRUCTURE signals only."""
+    return goal_dense(fused, goal)[:GOAL_3D_DIM]
+
+
+def goal_dense_2d(fused: FusedEvidence, goal: str) -> list[float]:
+    """The 2D head's g-indexed block: the s_goal cosine (pixel provenance) only."""
+    return goal_dense(fused, goal)[GOAL_3D_DIM:]
+
+
 INVENTORY_DIM = 4
 
 
@@ -139,6 +158,19 @@ def inventory_dense(fused: FusedEvidence) -> tuple[list[float], float]:
         (blocks / total) if total else 0.0,
         min(largest, 64) / 64.0,
     ], 1.0
+
+
+def inventory_items(fused: FusedEvidence, vocab: tuple[str, ...]) -> list[tuple[int, float]]:
+    """(embedding index, log-count weight) per held stack — heads v2's pooled item
+    channel (D7 §3). Index 0 is the unknown-item slot, same convention as held_index;
+    an absent inventory returns no items (the presence flag says why)."""
+    inventory = fused.state_feats.inventory
+    if inventory is None:
+        return []
+    rows = []
+    for item, count in inventory:
+        rows.append((held_index(item, vocab), math.log1p(count)))
+    return rows
 
 
 def channel(vec: tuple[float, ...] | None, dim: int) -> tuple[list[float], float]:

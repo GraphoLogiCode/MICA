@@ -229,6 +229,107 @@ def test_agent_events_feed_the_repropose_guard(runner):
     assert (5, 64, 5) in runner.agent_cells
 
 
+# --- the async wrapper (proof-grade fix 2026-07-13): gate reads off-thread ------
+
+class _FakeRunner:
+    """Stands in for LiveGateRunner: records what reached it, returns numbered
+    blocks, and can hold a read open so coalescing is observable."""
+
+    place = False
+
+    def __init__(self):
+        import threading
+        self.events = []
+        self.read_statuses = []
+        self.closed = False
+        self.hold = threading.Event()
+        self.hold.set()                     # default: reads return immediately
+
+    def ingest_events(self, block_events):
+        self.events.extend(block_events)
+
+    def read(self, belief, fused, status):
+        self.hold.wait(timeout=5.0)
+        self.read_statuses.append(status["n"])
+        return {"state": "observe", "n": status["n"]}
+
+    def close(self):
+        self.closed = True
+
+
+def _wait_for(condition, timeout=5.0):
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if condition():
+            return True
+        _time.sleep(0.01)
+    return False
+
+
+def test_async_runner_computes_off_thread_and_publishes_latest():
+    from mica.gate.live_loop import AsyncGateRunner
+
+    fake = _FakeRunner()
+    runner = AsyncGateRunner(fake)
+    assert runner.latest() is None          # nothing finished yet
+    runner.request(None, None, {"n": 1})
+    assert _wait_for(lambda: runner.latest() is not None)
+    assert runner.latest()["n"] == 1
+    runner.close()
+    assert fake.closed
+
+
+def test_async_runner_coalesces_to_the_freshest_request():
+    from mica.gate.live_loop import AsyncGateRunner
+
+    fake = _FakeRunner()
+    fake.hold.clear()                       # hold the first read open
+    runner = AsyncGateRunner(fake)
+    runner.request(None, None, {"n": 1})
+    _wait_for(lambda: len(fake.read_statuses) == 0)   # worker is inside read 1
+    for n in (2, 3, 4):                     # these arrive while 1 is in flight
+        runner.request(None, None, {"n": n})
+    fake.hold.set()
+    assert _wait_for(lambda: runner.latest() is not None
+                     and runner.latest()["n"] == 4)
+    # reads 2 and 3 were REPLACED, never executed: freshest-wins, no stale queue
+    assert fake.read_statuses in ([1, 4], [4])
+    runner.close()
+
+
+def test_async_runner_drains_events_before_the_read_in_order():
+    from mica.gate.live_loop import AsyncGateRunner
+
+    fake = _FakeRunner()
+    runner = AsyncGateRunner(fake)
+    runner.ingest_events(["a", "b"])
+    runner.ingest_events(["c"])
+    runner.request(None, None, {"n": 1})
+    assert _wait_for(lambda: runner.latest() is not None)
+    assert fake.events == ["a", "b", "c"]
+    runner.close()
+
+
+def test_async_runner_survives_a_gate_crash():
+    from mica.gate.live_loop import AsyncGateRunner
+
+    class _Crashing(_FakeRunner):
+        def read(self, belief, fused, status):
+            if status["n"] == 1:
+                raise RuntimeError("boom")
+            return super().read(belief, fused, status)
+
+    fake = _Crashing()
+    runner = AsyncGateRunner(fake)
+    runner.request(None, None, {"n": 1})
+    assert _wait_for(lambda: runner.latest() is not None)
+    assert "gate error" in runner.latest()["reason"]
+    runner.request(None, None, {"n": 2})    # the worker is still alive
+    assert _wait_for(lambda: runner.latest().get("n") == 2)
+    runner.close()
+
+
 def test_arm0_neutral_derivation_sides():
     assert commit.derive_arm0_neutral(0.7, theta_1=0.5) == 0.52
     assert commit.derive_arm0_neutral(0.1, theta_1=0.5) == 0.2

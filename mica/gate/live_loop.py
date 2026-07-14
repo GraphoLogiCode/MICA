@@ -21,8 +21,10 @@ as OBSERVE with the reason saying so.
 """
 from __future__ import annotations
 
+import collections
 import json
 import os
+import threading
 import time
 
 from ..assist import sufficiency as assist
@@ -376,6 +378,101 @@ class LiveGateRunner:
                 json.dump(self.account.report(committed_places=self.directives),
                           handle, indent=2)
             print(f"  materials report -> {os.path.basename(report_path)}")
+
+
+class AsyncGateRunner:
+    """The live gate OFF the ingest thread (the proof-grade fix, 2026-07-13).
+
+    The measured problem: one gate read costs 200–360 ms mean on this machine
+    (decoder forward + staircase), and it ran INSIDE the socket-draining loop —
+    six-plus ticks of ingest blocked every second, which is exactly where the
+    gap ticks that spoil proof-grade sessions came from (every recent session:
+    gate mean 205–361 ms, gaps 13–184, stale ≈ gaps).
+
+    This wrapper runs the SAME runner on one worker thread. The ingest loop
+    hands over the freshest (belief, fused, status) and keeps draining; the
+    worker computes at its own pace; the newest finished gate block is picked
+    up at the next status write. A request that arrives while a read is in
+    flight REPLACES the waiting one — the gate wants the freshest moment,
+    never a queue of stale ones (so trace rows may be sparser than status
+    ticks when reads run long; each row is still one real read, D5 §7).
+
+    Block events buffer through a deque and are drained by the worker right
+    before each read, so the runner's cell sets have exactly ONE mutating
+    thread — handing the sets to two threads was a set-changed-during-
+    iteration crash waiting for a busy session.
+    """
+
+    def __init__(self, runner: LiveGateRunner, on_timing=None):
+        self._runner = runner
+        self._on_timing = on_timing            # e.g. a StallMeter's .add
+        self._events: collections.deque = collections.deque()
+        self._lock = threading.Lock()
+        self._request = None
+        self._wake = threading.Event()
+        self._block: dict | None = None
+        self._closing = False
+        self._thread = threading.Thread(target=self._loop, name="gate-read",
+                                        daemon=True)
+        self._thread.start()
+
+    @property
+    def place(self) -> bool:
+        return self._runner.place
+
+    def ingest_events(self, block_events) -> None:
+        """Ingest-thread side: buffer only. deque.append is atomic under the GIL."""
+        for event in block_events:
+            self._events.append(event)
+
+    def request(self, belief, fused, status: dict) -> None:
+        """Hand the worker the freshest inputs; never blocks."""
+        with self._lock:
+            self._request = (belief, fused, status)
+        self._wake.set()
+
+    def latest(self) -> dict | None:
+        """The newest COMPLETED gate block (None until the first read lands)."""
+        with self._lock:
+            return self._block
+
+    def _loop(self) -> None:
+        while True:
+            # The bounded wait makes lost wakeups impossible to hang on: worst
+            # case the worker notices a request (or the close) half a second late.
+            self._wake.wait(timeout=0.5)
+            with self._lock:
+                request, self._request = self._request, None
+                self._wake.clear()
+                closing = self._closing
+            if request is None:
+                if closing:
+                    return
+                continue
+            drained = []
+            while self._events:
+                drained.append(self._events.popleft())
+            if drained:
+                self._runner.ingest_events(drained)
+            started = time.perf_counter()
+            try:
+                block = self._runner.read(*request)
+            except Exception as error:          # a gate crash must not kill the worker
+                block = {"state": "observe", "reason": f"gate error: {error}",
+                         "k_commit": 0,
+                         "authority": "place" if self._runner.place else "demo"}
+            if self._on_timing is not None:
+                self._on_timing((time.perf_counter() - started) * 1000.0)
+            with self._lock:
+                self._block = block
+
+    def close(self) -> None:
+        """Finish the read in flight, stop the worker, close the runner."""
+        with self._lock:
+            self._closing = True
+        self._wake.set()
+        self._thread.join(timeout=30.0)
+        self._runner.close()
 
 
 def replay_gate(jsonl_path: str) -> int:

@@ -9,6 +9,42 @@
 
 ---
 
+# 🎯 PROOF-GRADE FIX: GATE READS OFF THE INGEST THREAD + MOD 0.0.9 BUFFER (2026-07-13, late night)
+
+**The measured cause of every gapped session** (stall meters across the last 10 live
+runs): the gate read costs **205–361 ms MEAN** (worst 989 ms) and ran INSIDE the
+socket-draining loop — six-plus blocked ticks every second, all session. `stale ≈
+gaps` everywhere (review F6's watch condition has fired: late arrivals were being
+discarded, most of them late because of our own stalls).
+
+**Fix 1 — `AsyncGateRunner`** (`mica/gate/live_loop.py`): the same LiveGateRunner on
+one worker thread. The ingest loop hands over the freshest (belief, fused, status)
+and keeps draining; freshest-wins coalescing (no stale queue); block events buffer
+through a deque so the runner's cell sets have exactly one mutating thread; a gate
+crash degrades to an OBSERVE block instead of killing the worker; a bounded wait
+makes lost wakeups impossible to hang on. run_live wires it around the runner; the
+stall meter now records from the worker's own clock (expect `gate` timings unchanged
+but `moment` worst to COLLAPSE — that is the number that makes sessions proof-grade).
+4 new concurrency tests. Torch releases the GIL during the decoder forward, so the
+read now genuinely overlaps ingest.
+
+**Fix 2 — mod 0.0.9**: the live-stream drop-oldest buffer grows 64 → 300 messages
+(~3.2 s → ~15 s at 20 Hz, ~9 MB worst case) — sized before three GPU models shared
+the machine; now it absorbs the rare long stall instead of losing moments. Jar
+**mica-b0-capture-1.4.0 rebuilt (19 s, out-of-tree per the recorded schtasks
+pattern — the assistant-tree NIO limitation still stands) and verified to carry
+0.0.9**. ► USER STEP: install `capture/fabric-mod/build/libs/mica-b0-capture-1.4.0.jar`
+into the launcher's mods folder; the next manifest must say `fabric-b0-0.0.9`.
+
+**Not changed, on purpose:** the reorderer's stale policy (F6) — with the stalls
+gone, lateness should collapse; re-measure before adding a hold-back window. The
+1 Hz snapshot/manifest check (~50–65 ms mean) stays on-thread for now — one tick of
+occasional stall sits inside the new buffer's tolerance; revisit only if the next
+sessions still show gaps.
+
+**Acceptance bar (post-cascade plan §2): three consecutive real sessions with
+`proof_grade: true`.** Sight `worst-stall` in the 1 Hz line dropping to ~tens of ms.
+
 # 🧾 CASCADE #3 VERDICT + STAGE-A DECODER PIN + DEBTS BATCH (2026-07-13, night)
 
 **Cascade A #3 completed** (pair pool 9,881 → 14,202; 13 agreed sessions). Verdict —

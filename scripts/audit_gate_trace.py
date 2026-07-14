@@ -116,6 +116,62 @@ def _correction_ticks(trace_path: str) -> set[int] | None:
     return ticks or None
 
 
+def _agent_name(actor: str) -> bool:
+    # mirrors contracts/b0.py is_agent_actor without importing the heavy contracts
+    return actor == "MICA_AI" or actor.startswith("MICA_AI_")
+
+
+def _agent_b0_places(trace_path: str) -> set[tuple] | None:
+    """Every cell the AGENT actually placed per the session's B0 recording — the
+    authoritative execution record — or None when no raw recording sits next to
+    the trace (replays, counterfactual, test fixtures)."""
+    marker = ".gate_trace"
+    name = os.path.basename(trace_path)
+    if marker not in name:
+        return None
+    raw = os.path.join(os.path.dirname(trace_path), name[: name.index(marker)] + ".jsonl")
+    if not os.path.exists(raw):
+        return None
+    cells = set()
+    with open(raw, encoding="utf-8") as handle:
+        for line in handle:
+            if '"block_events"' not in line:
+                continue
+            try:
+                packet = json.loads(line)
+            except ValueError:
+                continue                      # torn tail line
+            for event in (packet.get("server") or {}).get("block_events") or []:
+                if event.get("op") == "place" and _agent_name(event.get("actor", "")):
+                    cells.add(tuple(event["pos"]))
+    return cells
+
+
+def _check_b0_cross(audit: TraceAudit, rows: list[dict],
+                    b0_places: set[tuple] | None) -> None:
+    """P-1 (review F4): the trace's committed directives and the B0 recording must
+    tell the same story. HARD direction: every block the agent really placed must
+    have been authorized (an unauthorized placement is the one failure this whole
+    layer exists to prevent). SOFT direction: an authorized directive with no
+    landed block is legitimate (the body re-checks the world and may refuse) —
+    counted, not failed."""
+    if b0_places is None:
+        return
+    authorized = set()
+    for row in rows:
+        for action in row.get("committed_actions") or []:
+            cell = (action.get("action") or {}).get("cell")
+            if cell:
+                authorized.add(tuple(cell))
+    for cell in sorted(b0_places - authorized):
+        audit.fail("-", f"UNAUTHORIZED agent placement at {list(cell)} — recorded "
+                   "in B0 but never committed by the gate")
+    unexecuted = len(authorized - b0_places)
+    if unexecuted:
+        audit.warn("-", f"{unexecuted} authorized directive(s) never landed a block "
+                   "(body refusal or failure — see the agent status file)")
+
+
 def _session_declared(trace_path: str) -> bool | None:
     """Whether this trace's session has a declared target on record: True/False
     when declared_targets.json is on disk, None when there is nothing to check
@@ -461,6 +517,9 @@ def audit_trace(path: str, meta: dict, allow_place: bool) -> TraceAudit:
         _check_snapshots(audit, segment, corrections)
         _check_staircase(audit, segment, meta["thresholds"]["c_min"])
         _check_fsm(audit, segment, fsm_cfg, meta["thresholds"]["m_consecutive"])
+    # P-1: the whole file against the session's B0 recording — placements that
+    # really happened must all have been authorized, whatever the segment.
+    _check_b0_cross(audit, rows, _agent_b0_places(path))
     return audit
 
 

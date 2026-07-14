@@ -634,17 +634,26 @@ function start(port) {
       if (!type) return;
       const built = new Set(((status && status.built_cells) || [])
         .map(([x, y, z]) => `${x},${y},${z}`));
+      const unreachable = new Set();   // walk-timeout cells: never retried this errand
       while (gathering && !gatherStopped && gathering.mined < gathering.count) {
         const found = bot.findBlocks({ matching: type.id, maxDistance: 48, count: 24 })
           .filter((pos) => !insideProtected(pos, status)
-            && !built.has(`${pos.x},${pos.y},${pos.z}`));
+            && !built.has(`${pos.x},${pos.y},${pos.z}`)
+            && !unreachable.has(`${pos.x},${pos.y},${pos.z}`));
         if (!found.length) {
           bot.chat(`No ${gathering.source} in reach outside your build area — `
             + 'leaving that to you.');
           break;
         }
-        await bot.pathfinder.goto(new goals.GoalGetToBlock(
-          found[0].x, found[0].y, found[0].z));
+        // P-3: the same 20 s walk race the placement errand runs — an unreachable
+        // ore/log skips to the next candidate, never hangs the errand.
+        try {
+          await gotoWithTimeout(new goals.GoalGetToBlock(
+            found[0].x, found[0].y, found[0].z), 20000);
+        } catch (err) {
+          unreachable.add(`${found[0].x},${found[0].y},${found[0].z}`);
+          continue;
+        }
         if (!gathering || gatherStopped) break;
         const block = bot.blockAt(found[0]);
         if (!block || block.name !== gathering.source) continue;   // world moved on
@@ -660,6 +669,19 @@ function start(port) {
       gathering = null;
       try { bot.pathfinder.setGoal(null); } catch (e) { /* mid-respawn */ }
     }
+  }
+
+  // An unreachable goal must never freeze the body (review 2026-07-13 F3): every
+  // errand walk races a hard timeout. The caller's finally clears the goal; the
+  // timer is cleared so a finished walk leaves nothing ticking (P-3).
+  function gotoWithTimeout(goal, ms) {
+    let timer = null;
+    return Promise.race([
+      bot.pathfinder.goto(goal),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('walk timed out')), ms);
+      }),
+    ]).finally(() => clearTimeout(timer));
   }
 
   // --- gate placement errand (D5 §9 amendment, 2026-07-12) --------------------
@@ -697,13 +719,8 @@ function start(port) {
       if (!item) return finishPlace(directive, false, 'block not in inventory');
       const me = bot.entity.position;
       if (!placeMath.withinReach([me.x, me.y, me.z], directive.cell)) {
-        // An unreachable target must not freeze the body (review 2026-07-13 F3):
-        // race the walk against a hard timeout; the finally clears the goal.
-        await Promise.race([
-          bot.pathfinder.goto(new goals.GoalNear(cx, cy, cz, 3)),
-          new Promise((_, reject) => setTimeout(
-            () => reject(new Error('walk timed out')), 20000)),
-        ]);
+        // An unreachable target must not freeze the body (review 2026-07-13 F3).
+        await gotoWithTimeout(new goals.GoalNear(cx, cy, cz, 3), 20000);
       }
       if (placeStopped || !placing) return finishPlace(directive, false, 'stopped');
       // Authority can drop while walking (the human came back): obey the freshest

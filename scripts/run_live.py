@@ -544,7 +544,7 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
         d2=d2, monitor=monitor, pixel_head=head))
     gate_runner, gate_block = None, None
     if d2 is not None and "--no-gate" not in sys.argv:
-        from mica.gate.live_loop import LiveGateRunner, gate_ready
+        from mica.gate.live_loop import AsyncGateRunner, LiveGateRunner, gate_ready
         if gate_ready():
             # preload: the decoder loads NOW (before the socket attaches), never on
             # the pipeline thread mid-session — a lazy first-read load would stall
@@ -577,6 +577,13 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
     # The runner's own two heavy steps, measured like the pipeline measures its own
     # (D6 review F8): together they say where a gapped session's time actually went.
     gate_stall, snap_stall = StallMeter(), StallMeter()
+    if gate_runner is not None:
+        # The proof-grade fix (2026-07-13): gate reads cost 200-360 ms mean and
+        # used to run INSIDE the socket-draining loop — the measured source of
+        # the gap ticks. The worker computes off-thread; the loop below only
+        # hands over inputs and picks up the newest finished block. The meter
+        # still records every read, now from the worker's own clock.
+        gate_runner = AsyncGateRunner(gate_runner, on_timing=gate_stall.add)
     seen_snapshots = set(_snapshot_paths(jsonl, session_id))
     # Snapshots discovered on disk but not yet judged. A file appearing does NOT
     # mean the pipeline has consumed every moment up to its tick — when processing
@@ -641,10 +648,12 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
                                 print(f"  region grew — frame now {list(region_now)}")
                                 pipeline.notice_region(new_region)
                 if gate_runner is not None:
-                    gate_started = time.perf_counter()
-                    gate_block = gate_runner.read(pipeline.belief, pipeline.last_fused,
-                                                  pipeline.status())
-                    gate_stall.add((time.perf_counter() - gate_started) * 1000.0)
+                    # Hand the worker the freshest inputs and take the newest
+                    # FINISHED block — the first status write of a session may
+                    # carry no gate block yet (the read lands ~a second later).
+                    gate_runner.request(pipeline.belief, pipeline.last_fused,
+                                        pipeline.status())
+                    gate_block = gate_runner.latest()
                 _write_live_status(status_path, session_id, pipeline, head, d2,
                                    gate=gate_block)
                 # The failure that must never be quiet again: the build has left the

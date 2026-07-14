@@ -8,8 +8,7 @@ Fabric Loom: 1.17.13
 > Task :classes
 > Task :jar
 > Task :processIncludeJars UP-TO-DATE
-> Task :sourcesJar UP-TO-DATE
-> Task :remapSourcesJar UP-TO-DATE
+> Task :sourcesJar
 > Task :compileTestJava NO-SOURCE
 > Task :processTestResources NO-SOURCE
 > Task :testClasses UP-TO-DATE
@@ -17,8 +16,9 @@ Fabric Loom: 1.17.13
 > Task :validateAccessWidener NO-SOURCE
 > Task :check UP-TO-DATE
 > Task :remapJar
+> Task :remapSourcesJar
 > Task :assemble
 > Task :build
 
-BUILD SUCCESSFUL in 36s
-7 actionable tasks: 3 executed, 4 up-to-date
+BUILD SUCCESSFUL in 19s
+7 actionable tasks: 5 executed, 2 up-to-date

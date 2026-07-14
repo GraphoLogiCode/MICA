@@ -772,7 +772,7 @@ public class B0CaptureClient implements ClientModInitializer {
         m.addProperty("session_id", st.sessionId);
         m.addProperty("session_start_ms", st.sessionStartMs);
         m.addProperty("mc_version", "1.16.5");
-        m.addProperty("mod_version", "fabric-b0-0.0.8");   // 0.0.8: sparse full-inventory samples (D7); 0.0.7: growth fires off the EVENTS
+        m.addProperty("mod_version", "fabric-b0-0.0.9");   // 0.0.9: 15 s live-stream buffer (proof-grade); 0.0.8: sparse full-inventory samples (D7)
         m.addProperty("event_schema_version", "1");   // B0 block-event schema version (jsonl_ingest reads this)
         // The frame settings this recording ran with — two captures with different
         // settings must be tellable apart from their manifests alone.
@@ -852,7 +852,12 @@ public class B0CaptureClient implements ClientModInitializer {
     // the game never stalls. Lossy on purpose — the disk recorder is the complete copy.
     private static final class LiveStream {
         private final ServerSocket server;
-        private final BlockingQueue<byte[]> queue = new ArrayBlockingQueue<>(64);
+        // 0.0.9: 64 -> 300 messages (~15 s at 20 Hz, ~9 MB worst case). The 3.2 s
+        // buffer was sized before three GPU models shared the consumer's machine;
+        // real sessions dropped 13-184 ticks whenever the pipeline paused past it.
+        // The consumer-side fix (gate reads off the ingest thread) removes the
+        // routine stalls; this absorbs the rare long one instead of losing moments.
+        private final BlockingQueue<byte[]> queue = new ArrayBlockingQueue<>(300);
         private final Thread thread;
         private volatile Socket client;
 

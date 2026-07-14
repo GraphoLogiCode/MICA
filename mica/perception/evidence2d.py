@@ -59,8 +59,24 @@ def _pos_changed(now, before) -> bool:
             or abs(now.z - before.z) > _POSITION_EPS)
 
 
+# The mod records Minecraft's ACCUMULATING yaw (measured 2026-07-13: real sessions
+# span e.g. -1848°..559° — multiple full turns, no ±180 wrapping), so raw
+# differences are the truth. The one artifact real data shows is a rare client
+# RE-ANCHOR (respawn/teleport): a single-tick jump of ~±360·k that is not a look.
+# No human turns 300° in one 50 ms tick, so anything past this is a reset, not
+# motion. (The once-recorded "wrap at ±180" premise was measured false — applying
+# a wrapped difference here would corrupt legitimate >180° turns instead.)
+_YAW_RESET_DEGREES = 300.0
+
+
+def _yaw_reset(step: float) -> bool:
+    return abs(step) > _YAW_RESET_DEGREES
+
+
 def _camera_moved(now, before) -> bool:
-    return abs(now.yaw - before.yaw) > _CAMERA_DEGREES or abs(now.pitch - before.pitch) > _CAMERA_DEGREES
+    yaw_step = now.yaw - before.yaw
+    yaw_moved = _CAMERA_DEGREES < abs(yaw_step) and not _yaw_reset(yaw_step)
+    return yaw_moved or abs(now.pitch - before.pitch) > _CAMERA_DEGREES
 
 
 def _human_events(packet: ObservationPacket):
@@ -107,11 +123,20 @@ def _state_feats(window: list[ObservationPacket], recent: tuple[str, ...],
         (pos_now.x - pos_then.x, pos_now.y - pos_then.y, pos_now.z - pos_then.z)
         if pos_now and pos_then else (0.0, 0.0, 0.0)
     )
+    # yaw_delta is last-minus-first, CORRECTED for any client re-anchor inside the
+    # window: subtracting the detected reset jumps leaves the amount actually
+    # turned. Windows without a reset compute the exact same float as before —
+    # no re-summation, so every banked record stays bit-identical.
+    yaw_delta = last.client.yaw - first.client.yaw
+    for a, b in zip(window, window[1:]):
+        step = b.client.yaw - a.client.yaw
+        if _yaw_reset(step):
+            yaw_delta -= step
     return StateFeats(
         held_item=last.client.held_item or "minecraft:air",
         hotbar=last.client.hotbar or (),
         pos_delta=pos_delta,
-        yaw_delta=last.client.yaw - first.client.yaw,
+        yaw_delta=yaw_delta,
         pitch_delta=last.client.pitch - first.client.pitch,
         recent_actions=recent,
         inventory=inventory_sample[1] if inventory_sample else None,

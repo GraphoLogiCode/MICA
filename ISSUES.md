@@ -9,6 +9,46 @@
 
 ---
 
+# 🧾 CASCADE #3 VERDICT + STAGE-A DECODER PIN + DEBTS BATCH (2026-07-13, night)
+
+**Cascade A #3 completed** (pair pool 9,881 → 14,202; 13 agreed sessions). Verdict —
+accept heads + gate, decoder flagged:
+- Held-out ECE 0.225 → 0.2624 (mild; the rejected cascade hit 0.417). Per-goal ECE
+  exposes the diversity gap: defense 0.124 vs production 0.5745 / decorative 0.442.
+- Gate freeze: θ₁ 0.35 → **0.50**, θ_suggest 0.295, θ_place **0.395**, validation
+  conf max **0.4138** — placement reachable on validation for the FIRST time, by the
+  pinned rule. Safety criteria ALL PASS (5 train-seen commits).
+- **Decoder OQ1 FAILED** (stage B NLL 1.6484 > stage A 1.6035; coherence 0.034 vs
+  0.094 — collapsed from 0.213 on the v3 corpus). ► USER DECISION (same night):
+  **stage A is the live decoder** — `decoder_v1.pt` = stage-A weights, stage B
+  banked as `decoder_v1_stage_b.pt`, pin + caveat recorded in `decoder_v1.json`.
+  Known consequence: the horizon≥2 confidence head is stage-B-trained, so K_commit
+  effectively caps at 1 live — congruent with the 1-block-per-read authority.
+  Retrofit investigation is its own workstream (post-cascade plan §1).
+
+**Debts batch (same night):**
+- [x] **Yaw wrap (F5/N-3) — RESOLVED BY MEASUREMENT, premise corrected.** The mod
+  records ACCUMULATING yaw (12 sessions scanned: ranges like −1848°..559°, exactly
+  ONE single-tick discontinuity — a client re-anchor, not systematic ±180 wrapping).
+  The recorded wrapped-difference fix would have CORRUPTED legitimate >180° window
+  turns. Implemented instead: a reset guard (`_YAW_RESET_DEGREES` 300) — the tick
+  classifier ignores re-anchor jumps, and the window `yaw_delta` subtracts them;
+  windows without a reset are bit-identical (no re-summation; golden equivalence
+  re-verified). 5 tests (`tests/test_yaw_reset.py`). Corpus regen still rides the
+  heads-v2 cascade as pinned.
+- [x] **P-1 — auditor ↔ B0 cross-check**: `audit_gate_trace.py` now reads the
+  session's raw recording; every MICA_AI place event must match a committed
+  directive (HARD fail: unauthorized placement), unexecuted directives are counted
+  as warns (body refusal is legitimate). All 36 banked traces pass.
+- [x] **P-2 — watcher placement passthrough**: `MICA_PLACE=1` makes lan_autostart
+  spawn run_live with `--place`; logged in rig_log's `runlive_start`. Default off.
+- [x] **P-3 — gather walk timeout**: shared `gotoWithTimeout` (20 s, timer cleaned)
+  now guards BOTH errands; gather also remembers unreachable cells per errand so a
+  timeout can't retry the same block forever.
+- [~] **N-1 / N-2** fold into the heads-v2 feature work (post-cascade plan §3), not
+  patched on v1.
+Suite 331 green; node --check clean on agent.js + lan_autostart.js.
+
 # 🧱 D5 §9 PIN LIFTED — PLACEMENT ENABLED BEHIND `--place`: DECLARED-TARGET ROUTE, F4 AGENT-POSITION VETO, BODY EXECUTOR (2026-07-13, user decision)
 
 The pin's two preconditions were long met (calibrated heads 07-05; A7 in-game 07-04,
@@ -109,15 +149,15 @@ confidence-only suffices: 013710's 4 commits (conf 0.43–0.50) and 165730's 0.9
 peak. Runbook step 5 amended.
 
 **Still open before the first placement session:**
-- [ ] **P-1 — auditor B0 cross-check (review F4)**: committed directives vs the
+- [x] **P-1 — auditor B0 cross-check (review F4)** *(DONE 2026-07-13 night — see the debts-batch entry at top)*: committed directives vs the
   session's actual MICA_AI place events, both directions. Required before any
   UNsupervised placement session; the first supervised one can precede it.
-- [ ] **P-2 — watcher vs --place (review F8)**: `lan_autostart.js` spawns run_live
+- [x] **P-2 — watcher vs --place (review F8)** *(DONE 2026-07-13 night — MICA_PLACE=1 passthrough)*: `lan_autostart.js` spawns run_live
   WITHOUT `--place` and owns the single-consumer socket. For the supervised session:
   stop the watcher, run `python scripts/run_live.py --heads v1 --place` by hand, and
   confirm the "PLACEMENT ENABLED" banner. A `MICA_PLACE=1` passthrough is the later
   unattended option (deliberately not wired yet).
-- [ ] **P-3 — gather walk timeout**: the gather errand shares F3's unguarded goto;
+- [x] **P-3 — gather walk timeout** *(DONE 2026-07-13 night — shared gotoWithTimeout)*: the gather errand shares F3's unguarded goto;
   give it the same 20 s race when gather next gets touched.
 
 **PLACEMENT RUNBOOK (supersedes the 07-06 demo runbook's placement half):** 1) stop
@@ -447,7 +487,7 @@ what's solid, the checklist): vault `2026-07-06 - D6 Live Runtime Loop Review`.
 - [ ] **F4 (MINOR, user decision)** — D5 §10's "live gate adds the agent's own position" is
   NOT in the gate (the embodiment's follow band covers the demo). Recommend wiring agent pos
   into GateRead when PLACE_LOW_RISK is first enabled (agent status file already has the pose).
-- [ ] **F5 (MINOR, next cascade)** — yaw compared unwrapped across ±180° (`_camera_moved`,
+- [x] **F5 (MINOR) — RESOLVED BY MEASUREMENT 2026-07-13 (yaw accumulates; reset guard shipped instead — top entry).** — yaw compared unwrapped across ±180° (`_camera_moved`,
   `yaw_delta`): wrap-crossing windows carry ±360-corrupted yaw_delta into training pairs.
   Fix changes evidence bit-for-bit → must ride a corpus-regenerating cascade; first check
   what yaw range the mod reports.
@@ -653,7 +693,7 @@ gaze style). Knock-ons to revisit:
   navigate/inspect/idle (the placing-streak gate drops mid-burst) and `focus.dwell_ticks` is
   nonzero on build corrections (the intended dwell→INSPECT signal). Re-check `_STREAK_WEIGHT` /
   `_DWELL_WEIGHT` / `_PROGRESS_GAIN` against the regenerated corpus.
-- [ ] **N-3 — yaw wrap in `evidence2d._camera_moved`.** Raw `now.yaw - before.yaw` misreads a
+- [x] **N-3 — RESOLVED BY MEASUREMENT 2026-07-13 (premise corrected — see the debts-batch entry at top).** Raw `now.yaw - before.yaw` misreads a
   ±180° wrap as a huge one-tick INSPECT spike on real captures. The choreographer sidesteps it
   (it emits continuous unwrapped yaw), but the mod records raw yRot — fix with a wrapped-difference
   helper.

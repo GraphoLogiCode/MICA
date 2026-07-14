@@ -169,7 +169,13 @@ function spawnRunLive() {
   // Offline mode reads the same local caches without the network round-trip;
   // verified the full GPU load works under it. Downloads (setup_uni3d.py) run
   // outside the rig, so nothing here ever needs the Hub live.
-  runLive = spawn(PYTHON, ['scripts/run_live.py', '--wait-session', '--heads', 'v1'],
+  // P-2 (review F8): MICA_PLACE=1 opts the watcher's run_live into placement —
+  // the same §9-amendment authority the manual runbook enables by hand. Off by
+  // default so an unattended rig keeps the demo posture; logged below so rig_log
+  // records which authority every session ran under.
+  const placeArgs = process.env.MICA_PLACE === '1' ? ['--place'] : [];
+  runLive = spawn(PYTHON,
+    ['scripts/run_live.py', '--wait-session', '--heads', 'v1', ...placeArgs],
     { cwd: MICA_ROOT, stdio: ['ignore', 'pipe', 'pipe'],
       env: { MICA_PIXELS: '1', MICA_H3D: '1', HF_HUB_OFFLINE: '1', ...process.env } });
   runLiveSession = null;
@@ -209,7 +215,8 @@ function spawnRunLive() {
       }
     });
   });
-  log('runlive_start', { detail: 'models pre-warming; attaches when you enter a world' });
+  log('runlive_start', { detail: 'models pre-warming; attaches when you enter a world'
+    + (placeArgs.length ? ' — PLACEMENT ENABLED (MICA_PLACE=1)' : '') });
 }
 
 // --------------------------------------------------------- the body: agent

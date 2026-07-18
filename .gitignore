@@ -58,3 +58,6 @@ capture/youtube/
 # and labels staged in the tool but not yet applied).
 after_session_tool/skipped.json
 after_session_tool/staged_labels.json
+
+# decision records live in models/ but are hand-authored, not artifacts — keep them tracked
+!models/decoder_stage_pin.json

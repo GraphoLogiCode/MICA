@@ -1,0 +1,17 @@
+{
+  "ship_stage": "b",
+  "adjudicated": "2026-07-17",
+  "by": "run_decoder_eval OQ1 (pre-registered rule): PASS - retrofit NTP cost ok, coherence kept, deep horizon carries signal (B 1.6372 < A 1.66; coherence 0.048 vs 0.0633 within 0.02; h4 tau-acc 0.7432 vs 0.0115 chance)",
+  "history": [
+    {
+      "date": "2026-07-13",
+      "ship_stage": "a",
+      "by": "OQ1 FAIL (B 1.6484 > A 1.6035, coherence collapsed 0.034) - user pin"
+    },
+    {
+      "date": "2026-07-16",
+      "ship_stage": "b",
+      "by": "UNADJUDICATED - refit tooling clobbered the 07-13 pin (review 13/17 blocker); superseded same night by the 07-17 re-adjudication above"
+    }
+  ]
+}

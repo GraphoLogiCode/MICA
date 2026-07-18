@@ -53,6 +53,14 @@ def gate_checks(session: CapturedSession, capture_dir: str | None = None) -> lis
     for cov in report.coverage:
         checks.append((f"coverage: {cov.reader}", cov.satisfied,
                        "ok" if cov.satisfied else "MISSING " + ", ".join(cov.missing)))
+    # The D7 inventory channel, REPORT-ONLY (user decision 2026-07-16): the label says
+    # whether this recording carries the sparse full-inventory samples heads v2 wants,
+    # but a session without them never fails — the whole banked corpus predates the
+    # channel (mod 0.0.8), and old captures must not fail retroactively.
+    inv_samples = sum(1 for p in session.packets if p.client.inventory is not None)
+    checks.append(("inventory channel (D7)", True,
+                   f"{inv_samples} samples" if inv_samples
+                   else "none - pre-0.0.8 capture or channel absent, not D7-ready"))
     checks.append(("frames present", bool(frames), f"{len(frames)} frames"))
     checks.append(("frames undistorted (non-square)", any(f.width != f.height for f in frames),
                    f"{frames[0].width}x{frames[0].height}" if frames else "no frames"))

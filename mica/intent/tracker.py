@@ -82,7 +82,14 @@ def predict(belief: Belief, dt: float, params: TrackerParams) -> Belief:
 
 def floored(likelihood: Mapping[tuple[str, int], float], params: TrackerParams) -> Belief:
     """The model statement 'with probability ε the human acts outside the model':
-    guarantees a positive normalizer and caps how hard one step can move the belief."""
+    guarantees a positive normalizer and caps how hard one step can move the belief.
+
+    The humility bound M needs every likelihood entry in [0, 1] (Theorem 6's proof
+    caps the floored value at (1-ε)+ε/|A|). Both shipped heads are softmaxes, but a
+    future head returning unnormalized scores would silently void M for the gate —
+    so the precondition fails loudly here instead (review 13 F31)."""
+    assert all(0.0 <= value <= 1.0 + 1e-9 for value in likelihood.values()), (
+        "likelihood entries must lie in [0, 1] or the humility bound M is void")
     floor = params.epsilon / params.action_count
     return {key: (1.0 - params.epsilon) * value + floor for key, value in likelihood.items()}
 
@@ -91,7 +98,16 @@ def correct(
     belief: Belief, likelihood: Mapping[tuple[str, int], float], params: TrackerParams
 ) -> tuple[Belief, float]:
     """One observation: weight the predicted belief by the floored likelihood, normalize.
-    Returns the new belief and the normalizer Z_k (provably >= ε/|A| > 0)."""
+    Returns the new belief and the normalizer Z_k (provably >= ε/|A| > 0).
+
+    Positivity of the OUTPUT relies on the belief coming in strictly positive — which
+    predict() guarantees (the kernel re-mixes mass toward uniform). Calling correct()
+    repeatedly with no predict between can drive entries to exact zero (measured:
+    ~120 one-hot corrections), so the invariant is asserted instead of assumed
+    (review 13 F19)."""
+    assert min(belief.values()) > 0.0, (
+        "correct() needs a strictly positive belief - call predict() first "
+        "(a dead entry here means a predict step was skipped)")
     weighted = floored(likelihood, params)
     numerator = {key: weighted[key] * belief[key] for key in belief}
     normalizer = sum(numerator.values())

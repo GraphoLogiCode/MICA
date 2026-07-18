@@ -9,6 +9,122 @@
 
 ---
 
+# 🧠 BELIEF-TRACKER FULL-STACK REVIEW FIX PASS (2026-07-16, night)
+
+Vault note: `MICA Intent Belief Tracker/13 - Belief Tracker Full-Stack Review (mica-review).md`
+(93-agent adversarially-verified review; 39 findings, 0 refuted). User decisions: bundled refit;
+07-13 arms table RETRACTED outright; falsification = the vault's stricter criterion; idle DROPPED.
+
+- [x] **F1 BLOCKER — idle target leak.** `idle == 1[a_hat=IDLE]` sat in `shared_dense` and both
+  trained heads read it (flip test on shipped weights: P(IDLE) 0.000→0.997; idle corrections'
+  L-table collapsed to ~constant). Removed (SHARED_DIM 14→13); featurizer LEAK TEST added
+  (`tests/test_features_leak.py`: no head feature may be a function of a_hat — sabotage-proven);
+  `b3.py` flow comment now names a_hat/event_ids/idle as target-not-feature.
+- [x] **F2 BLOCKER — stale exposure grouping.** Trainers now pin `train_sessions_real` +
+  `validation_sessions` in the model jsons; `run_arms` derives its groups from them and asserts
+  arm1/heads_v1 agree; hand-maintained `_REAL_TRAIN_SEEN` deleted. **The 07-13 arms_report is
+  RETRACTED** (user decision) → `capture/raw/retracted/RETRACTED-20260716-*`.
+- [x] **F7 — falsification criterion reconciled to the vault's words** (user decision): a session
+  succeeds iff top-1 locks on AND STAYS by 40% of the build; the arm passes iff successes beat
+  1/|G| chance (exact one-sided binomial, α=0.05). `intent_metrics.falsification_verdict` + 06
+  dated amendment; mean early margin demoted to diagnostic.
+- [x] **F8 — pooled-then-binned ECE** per (group, arm) cell in run_arms (mean-of-per-session
+  ECEs kept only as `per_session_ece_mean_DISPERSION_ONLY`).
+- [x] **F9 — Arm-0 floor swap recorded**: 06 amended (fit-first (fit, comp) is the floor;
+  match−waste unreconstructable at B3 — needs template cell counts).
+- [x] **F6 — held-out calibration drops tuning-validation sessions** too; verified live: the
+  refit's held-out run drops 11 trained + 1 tuning session.
+- [x] **Fusion-review fixes folded in** (same refit): renormalized sweep objective
+  (Z(a_obs)/Σ_a Z(a)) + uniform p̂ for the class-balanced backbone. **Honest re-sweep verdict:
+  (w2, w3, γ) flipped from (0.0, 0.5, 1.0) → (1.0, 0.5, 0.0)** — γ collapsed to zero and the 2D
+  stream is no longer dropped; the 07-13 knobs are confirmed scale artifacts.
+- [x] **Guards landed**: correct() positivity assert + floored() L∈[0,1] assert (F19/F31);
+  run_tracker/run_arms/session_metrics skip-and-record degenerate sessions (F17/F21);
+  step() rejects negative mass (F22); pivot seam guards (F23); heuristic goal-symmetry assert
+  in the 12-F8 margin readout (F35); v0 SCAFFOLD folds to PLACE (F28); six-fold duplicated
+  guard tests deduped in test_tracker.py + test_b3_fusion.py (F18).
+- [x] **Vault batch**: Foundations gains A3′ (evidence exogeneity) + λ>0 + log-space fix +
+  TV constant + Lyapunov phrasing + A7 evidence-attribution sentence (the 06-17 review's four
+  fixes, finally applied) + Π rename + Seneta §3.4 pin + CLIPS authors filled; 03 gloss/flooring/
+  α,β; 02+07 taxonomy v3 amendments + τ(k) onset anchor; 01/00 decoder scoping + provenance
+  banners; 06 criterion + floor amendments.
+- [x] **Coordinated refit executed**: arm1 + heads_v1 retrained leak-free with pinned exposure;
+  honest held-out calibration: **ECE 0.2645** (the leak's free idle wins no longer mask
+  overconfidence; 12-F8 mode margin now POSITIVE +0.1232, was −0.084); scripted tracker re-bank:
+  fused 0.833/0.472 vs floor 1.0/0.425 (01 amended). heads_v2 re-swept honestly (γ=0).
+- [x] **Four-arm table regenerated** (honest grouping: real_never_seen = 20 sessions, was ~5
+  contaminated): **every arm FAILS the reconciled pre-registered criterion in every group**
+  (closest: arm0 scripted 3/5, p=0.058) — the old mean-margin test would have passed several
+  cells; the registered criterion passes none. The load-bearing finding: on real never-seen
+  sessions the structure floor collapses to 0.050 while both tracker arms reach 0.300 (6× —
+  the belief earns its keep exactly where templates stop being exact); v0 pooled-ECE 0.0877
+  is the best-calibrated arm. Earliness claim = OPEN pending the richer corpus, not passed.
+- [x] **decoder_v1 retrained** on the 130-dim leak-free context (corpus + Stage A/B; stage B
+  best holdout token NLL 1.7679). **Full suite: 353/353** — the fix pass is closed end to end.
+
+---
+
+# 📐 PERCEPTION-LAYER REVIEW FIX PASS — SYMMETRY + VERTICAL ANCHOR (2026-07-16, later)
+
+Vault note: `Implementation Reviews/2026-07-16 - Perception Layer Review (mica-review).md`.
+Two D2 symbolic features were computing wrong values that passed every range check and test
+— confirmed by execution, fixed same day, both sabotage-proven, corpus regenerated.
+
+- [x] **F1 — `_symmetry` axis mirrors were algebraically wrong** (computed the negated
+  centroid offset, not the reflection; score was translation-VARIANT — the longhouse's own
+  footprint read 0.71). Fixed with exact doubled-coordinate reflections; new property test
+  pins each mirror individually (a doubly-symmetric fixture lets `max()` hide one broken
+  mirror — how the bug shipped).
+- [x] **F2 — vertical anchor was min-built-y, unstated in D2** — one stray block four
+  levels below a perfect cabin sank the template into the terrain: comp stayed 1.0 via
+  underground stone while edit_distance exploded 0 → 57. Anchor now registered by
+  built-cell alignment voting; `Pose` carries `dy` (defaulted — old records parse);
+  stray-block + platform-first regression tests.
+- [x] **Symmetry gated** (user decision): `d2_progress_report` criterion 4 — clean
+  full-completion builds must read ≥ 0.9. Monotonicity criterion scoped per
+  (instance, POSE), logging `registration_moves` — dy in the registration surfaced a
+  near-tie argmax flip the old criterion had no vocabulary for.
+- [x] **D2 doc amended** (dated §3 block): vertical-anchor rule, pose-scoped
+  monotonicity, symmetry correction + gate.
+- [x] **Corpus regenerated** (user decision: immediately): scripted 30/30 via no-flag
+  `make_scripted_corpus.py`, progress report PASS (9/9 monotone, symmetry 1/1,
+  separation 0.167→0.967); real labeled sessions 33/33 via per-session
+  `after_game.py --redo-evidence` (the one nonzero exit is 210003's documented
+  correct quarantine). **19/25 matcher verdicts changed** — the terrain/crop_farm
+  pattern dissolved (7 pre-fix crop_farm reads → 1), 223829 flipped contests→AGREES
+  (its pairs now train), 022406 + 001126 flipped agrees→contests (their pairs now
+  correctly withheld). Regenerated records carry `pose.dy`; suite 350/350.
+- Still open from the same review: F3 (pixel-head ring vs stride-20), F4 (h3d width
+  check), F5 (two doc one-liners).
+
+---
+
+# 📦 B0 OBSERVATION-PACKET REVIEW FIX PASS (2026-07-16)
+
+Vault note: `Implementation Reviews/2026-07-16 - B0 Observation Packet Review (mica-review).md`.
+The D7 `inventory` field's production path was verified correct; every finding was in the
+untested seam around it.
+
+- [x] **F1 — `packet_to_dict` dropped `inventory`** (round-trip invariant silently false).
+  Fixed in `contracts/serialize.py`; `test_packet_round_trip_preserves_inventory` added
+  (proven able to fail by reverting the fix).
+- [x] **F2 — D0's B0 box never listed `inventory`.** Dated 2026-07-16 amendment added to D0
+  (schema box + leakage rule + field-map row + B1 state_feats note).
+- [x] **F3 — context-record leak boundary untested.** `test_context_record_inventory_pinned_before_run_start`
+  in `tests/test_d1.py`: a mid-run sample must never reach a context record (`run.t0 - 1` pin).
+- [x] **F4 — inventory presence invisible.** `"inventory channel (D7)"` gate line, REPORT-ONLY
+  (user decision 2026-07-16): sample count, or "not D7-ready" — never fails a capture; the
+  banked corpus predates the channel. NOT a coverage.py probe — every coverage reader hard-gates
+  in `b0_gate.gate_checks`, which would have failed all pre-07-10 captures.
+- [x] **Symmetry tripwire** (review Q1): `test_maximal_packet_round_trip_covers_every_field` —
+  dataclass-introspected maximal fixture; a field added to `ObservationPacket` without both
+  serializers now breaks a test instead of landing silently.
+- [x] **`scripts/tests/` deleted** (user decision 2026-07-16): a stale git-tracked snapshot of
+  `tests/` from the 07-05 recovery commit (`7e8c126`), 15+ files behind, never collected
+  (`testpaths = ["tests"]`), zero references repo-wide.
+
+---
+
 # 🧪 HEADS V2 BUILT + EVALUATED — PRE-REGISTERED CRITERIA FAIL; BANKED AS THE NEGATIVE RESULT (2026-07-13/14, night)
 
 D8 implemented exactly as reviewed (all seven checklist fixes): per-stream late

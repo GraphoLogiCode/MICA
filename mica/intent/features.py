@@ -32,7 +32,8 @@ _RECENT_ORDER = ("place", "break", "navigate", "inspect", "idle", "scaffold")
 
 H2D_DIM = 1024
 H3D_DIM = 1024
-SHARED_DIM = 14
+SHARED_DIM = 13   # was 14 until 2026-07-16: the idle flag was REMOVED (review 13 F1 —
+                  # idle IS one bit of the action being predicted; a leak, not a feature)
 GLOBAL_DIM = 9
 GOAL_DIM = 7
 
@@ -53,7 +54,17 @@ def held_index(held_item: str, vocab: tuple[str, ...]) -> int:
 
 
 def shared_dense(fused: FusedEvidence) -> list[float]:
-    """Goal-free player state: what were they just doing, how did they move and look."""
+    """Goal-free player state: what were they just doing, how did they move and look.
+
+    LEAK RULE (review 13 F1, 2026-07-16): nothing in this vector — or global_dense —
+    may be a deterministic function of the record's own a_hat. The idle flag used to
+    live here and is exactly that (idle == a_hat is IDLE, enforced by the validator),
+    so the trained heads could read one bit of the answer off their input: on the
+    shipped 07-13 weights, flipping that bit alone moved P(IDLE) from 0.000 to 0.997.
+    The flag stays in the B1/B3 contract for the FSM (a legitimate reader — the gate
+    predicts nothing); it must never re-enter the featurizer. The leak test in
+    tests/test_features_leak.py pins this for every feature.
+    """
     recent = fused.state_feats.recent_actions
     hist = [(sum(1 for a in recent if a == name) / len(recent)) if recent else 0.0
             for name in _RECENT_ORDER]
@@ -66,7 +77,6 @@ def shared_dense(fused: FusedEvidence) -> list[float]:
         max(-1.0, min(1.0, fused.state_feats.pitch_delta / 90.0)),
         min(fused.focus.dwell_ticks, 20) / 20.0 if fused.focus.block else 0.0,
         1.0 if fused.focus.block else 0.0,
-        1.0 if fused.idle else 0.0,
     ]
 
 

@@ -200,6 +200,11 @@ def main() -> int:
         b2 = [json.loads(line) for line in
               open(os.path.join(directory, f"{session_id}.evidence3d.jsonl"), encoding="utf-8")]
         fused = fuse_streams(b1, b2, session_id)   # the handoff: counts asserted, verified per record
+        if not fused:
+            # zero scored corrections: record and skip — one degenerate capture must
+            # never abort the whole eval run (review 13 F17)
+            print(f"  {session_id} SKIPPED (no scored corrections)")
+            continue
 
         trace: list | None = [] if "--trace" in sys.argv else None
         floor_calls = [max(f.per_goal, key=lambda g: (f.per_goal[g].fit, f.per_goal[g].comp))

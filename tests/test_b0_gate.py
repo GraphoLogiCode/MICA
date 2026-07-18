@@ -52,6 +52,26 @@ def test_provisional_count_is_hard_rejected():
     assert not gate_passes(crashed)
 
 
+def test_inventory_channel_is_reported_but_never_gates():
+    # Report-only (user decision 2026-07-16): the label carries the signal, the check
+    # never fails. A pre-0.0.8 session (no samples anywhere) must still pass the gate.
+    session = _with_frames(generate_session(wall_row_build()), 256, 144)
+    assert gate_passes(session)
+    checks = {name: (ok, detail) for name, ok, detail in gate_checks(session)}
+    ok, detail = checks["inventory channel (D7)"]
+    assert ok and "not D7-ready" in detail
+
+    # A session with samples reports how many, and still passes.
+    packets = list(session.packets)
+    packets[3] = dataclasses.replace(packets[3], client=dataclasses.replace(
+        packets[3].client, inventory=(("minecraft:oak_planks", 64),)))
+    sampled = dataclasses.replace(session, packets=tuple(packets))
+    assert gate_passes(sampled)
+    checks = {name: (ok, detail) for name, ok, detail in gate_checks(sampled)}
+    ok, detail = checks["inventory channel (D7)"]
+    assert ok and detail == "1 samples"
+
+
 def test_snapshots_required_only_when_declared(tmp_path):
     session = _with_frames(generate_session(wall_row_build()), 256, 144)
     declared = dataclasses.replace(

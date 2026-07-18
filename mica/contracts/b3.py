@@ -6,9 +6,18 @@ The constructor CHECKS the handoff: the two records must describe the same corre
 pipeline bug, never something to paper over silently.
 
 What flows through, and to whom (the goal-symmetry rule is part of the schema):
-  shared (adapter + BOTH heads):  a_hat, idle, state_feats, focus, global_feats, h2d, h3d
+  shared (adapter + BOTH heads):  state_feats, focus, global_feats, h2d, h3d
   DELIBERATIVE HEAD ONLY:         s_goal, per_goal   (g-indexed — feeding them to the
                                   heuristic head would break mode identifiability)
+  TARGET, NEVER A FEATURE:        a_hat and event_ids are the scored action and its
+                                  provenance — readable for indexing and labels, never
+                                  as head or adapter input (the head must PREDICT a_k,
+                                  not read it; 09-F1). idle is defined FROM a_hat
+                                  (idle == a_hat is IDLE, validator-enforced), so it
+                                  is one bit of the target: the FSM may read it (the
+                                  gate predicts nothing), the featurizer may not —
+                                  it sat in shared_dense until 2026-07-16 and let both
+                                  trained heads read the answer (review 13 F1).
 
 The dense fused vector e_k = A_phi(h2d, state_feats-embedding, h3d) is the TRAINED
 adapter's output and does not exist until Phase E trains it; in the hand-coded phase

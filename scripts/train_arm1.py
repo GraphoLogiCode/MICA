@@ -170,7 +170,15 @@ def main() -> int:
         "seed": seed, "trained": time.strftime("%Y-%m-%d %H:%M"),
         "best_val_nll": round(best_nll, 4),
         "data": {"train": len(train), "validation": len(validation),
-                 "held_out_sessions": sorted({s.session for s in validation})},
+                 "held_out_sessions": sorted({s.session for s in validation}),
+                 # Exposure provenance (review 13 F2): the EXACT real sessions whose
+                 # pairs entered training. run_arms derives its train-seen/validation
+                 # groups from these lists — never from a hand-maintained constant,
+                 # which is how six training-exposed sessions once landed in the
+                 # "never seen" cell of the four-arm table.
+                 "train_sessions_real": sorted(
+                     {s.session for s in train if s.session.startswith("fabric-")}),
+                 "validation_sessions": sorted({s.session for s in validation})},
         "mechanism": "feedforward per-step goal classifier, no recursion (Arm 1)",
         "training_seconds": round(time.time() - started, 1),
     }

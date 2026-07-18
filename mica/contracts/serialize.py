@@ -45,6 +45,7 @@ def packet_to_dict(packet) -> dict:
             "held_item": c.held_item,
             "hotbar": None if c.hotbar is None else list(c.hotbar),
             "gui_open": c.gui_open,
+            "inventory": None if c.inventory is None else [[item, count] for item, count in c.inventory],
         },
         "server": {
             "player_pos": None if s.player_pos is None else [
@@ -94,7 +95,8 @@ def evidence3d_to_dict(record) -> dict:
         "per_goal": {
             goal: {
                 "comp": feats.comp, "edit_distance": feats.edit_distance, "fit": feats.fit,
-                "pose": {"dx": feats.pose.dx, "dz": feats.pose.dz, "rot": feats.pose.rot},
+                "pose": {"dx": feats.pose.dx, "dz": feats.pose.dz, "rot": feats.pose.rot,
+                         "dy": feats.pose.dy},
                 "subtype": feats.subtype,
                 "delta_comp": feats.delta_comp,
             }
@@ -145,7 +147,8 @@ def fused_to_dict(fused) -> dict:
         "per_goal": {
             goal: {
                 "comp": feats.comp, "edit_distance": feats.edit_distance, "fit": feats.fit,
-                "pose": {"dx": feats.pose.dx, "dz": feats.pose.dz, "rot": feats.pose.rot},
+                "pose": {"dx": feats.pose.dx, "dz": feats.pose.dz, "rot": feats.pose.rot,
+                         "dy": feats.pose.dy},
                 "subtype": feats.subtype,
                 "delta_comp": feats.delta_comp,
             }

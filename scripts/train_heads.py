@@ -351,6 +351,14 @@ def main() -> int:
             "contested_pairs": len(contested),
             "train": len(train), "validation": len(validation),
             "held_out_sessions": held_sessions,
+            # Exposure provenance (review 13 F2): the EXACT real sessions whose pairs
+            # entered training, so eval grouping derives from the model file instead
+            # of a hand-maintained constant. validation_sessions is the same list as
+            # held_out_sessions under its honest name — these sessions tuned the
+            # temperatures and filter knobs; they are never "never seen".
+            "train_sessions_real": sorted(
+                {s.session for s in train if s.session.startswith("fabric-")}),
+            "validation_sessions": held_sessions,
             "reserved_sessions": reserved,
             "heur_samples": {"train": heur_train, "validation": heur_val,
                              "t_heur_fit": heur_fit_source},

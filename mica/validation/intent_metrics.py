@@ -26,12 +26,16 @@ import statistics
 from ..contracts.b1 import GOALS
 
 FALSIFICATION_PROGRESS = 0.40     # pinned in vault note 06, before any run
+FALSIFICATION_ALPHA = 0.05        # the small-N binomial test's significance level
 PROGRESS_BINS = tuple(round(0.1 * b, 1) for b in range(1, 11))
 
 
 def step(dist: dict[str, float], truth: str, progress: float) -> dict:
     """One evaluation step. Normalizes defensively so no arm can leak an unnormalized
-    distribution into the metrics."""
+    distribution into the metrics — including one with NEGATIVE mass, which a plain
+    sum-check would wave through as 'normalized' (review 13 F22)."""
+    if any(p < 0.0 for p in dist.values()):
+        dist = {g: max(p, 0.0) for g, p in dist.items()}
     total = sum(dist.values())
     if total <= 0:
         dist = {g: 1.0 / len(GOALS) for g in GOALS}
@@ -103,14 +107,47 @@ def separation_curve(steps: list[dict]) -> dict[str, float | None]:
 
 
 def early_separation_verdict(steps: list[dict]) -> dict:
-    """The pre-registered falsification check: mean separation over all steps with
-    progress <= 40%. Stated either way, never relabeled."""
+    """Per-session early-separation DIAGNOSTICS. The mean early margin is kept for
+    curves and debugging; the PASS/FAIL authority moved to falsification_verdict
+    (review 13 F7 + user decision 2026-07-16): the vault's registered criterion is
+    'pulls clear and stays clear before 40%, above chance across held-out builders',
+    and a mean-margin > 0 is a strictly weaker test (three confident early steps can
+    outweigh trailing the competitor for the rest of the early window)."""
     early = [s["dist"][s["truth"]] - max(p for g, p in s["dist"].items() if g != s["truth"])
              for s in steps if s["progress"] <= FALSIFICATION_PROGRESS]
     mean = round(statistics.mean(early), 4) if early else None
     return {"early_steps": len(early), "mean_separation": mean,
-            "criterion": f"mean separation > 0 before {FALSIFICATION_PROGRESS:.0%} of the build",
-            "passes": (mean is not None and mean > 0.0)}
+            "locked_by_040": sustained_from_progress(steps) <= FALSIFICATION_PROGRESS}
+
+
+def falsification_verdict(session_rows: list[dict], mean_early: float | None) -> dict:
+    """The pre-registered criterion, in vault 06's own words (reconciled 2026-07-16).
+
+    A session is an early SUCCESS iff the arm's top-1 call locks onto the truth and
+    STAYS there by 40% of the build (sustained_from_progress <= 0.40 — 'pulls clear
+    and stays clear'). 'Above chance across held-out builders' is an exact one-sided
+    binomial test: under the null that the arm guesses among |G| goals, a session
+    succeeds with probability at most 1/|G| (guessing right AND holding it is no
+    easier than guessing right), so the arm passes iff
+    P(Bin(n, 1/|G|) >= k) < FALSIFICATION_ALPHA. Small n makes the test honestly
+    hard: with 4 sessions even 4/4 successes gives p = 0.0016, but 2/4 gives 0.18 —
+    a coin-flip count can never sneak past as 'above chance'."""
+    successes = sum(1 for r in session_rows
+                    if r["sustained_from_progress"] <= FALSIFICATION_PROGRESS)
+    n = len(session_rows)
+    chance = 1.0 / len(GOALS)
+    p_value = sum(math.comb(n, i) * chance ** i * (1 - chance) ** (n - i)
+                  for i in range(successes, n + 1)) if n else None
+    return {
+        "criterion": (f"top-1 locks on and stays by {FALSIFICATION_PROGRESS:.0%} of the "
+                      f"build, above 1/{len(GOALS)} chance across held-out sessions "
+                      f"(exact binomial, alpha {FALSIFICATION_ALPHA})"),
+        "sessions": n,
+        "locked_by_040": successes,
+        "p_value": round(p_value, 4) if p_value is not None else None,
+        "mean_early_separation_DIAGNOSTIC": mean_early,
+        "passes": p_value is not None and p_value < FALSIFICATION_ALPHA,
+    }
 
 
 def entropy_curve(steps: list[dict]) -> dict[str, float | None]:
@@ -155,6 +192,12 @@ def recovery_after_pivot(steps: list[dict], pivot_index: int) -> dict:
     overtakes the OLD goal and stays ahead. The old goal is the truth of the step
     just before the pivot; recovery is measured against it specifically (06's
     definition), not against all competitors."""
+    if not 0 < pivot_index < len(steps):
+        # pivot_index = 0 would silently read steps[-1] as the "old goal" — the last
+        # POST-pivot step, degenerating the metric (review 13 F23). A seam with no
+        # records on one side is the caller's to skip-and-record, not ours to fake.
+        raise ValueError(f"pivot_index {pivot_index} has no steps on one side "
+                         f"(session has {len(steps)})")
     old_goal = steps[pivot_index - 1]["truth"]
     after = steps[pivot_index:]
     recovered_at = len(after)
@@ -171,6 +214,17 @@ def recovery_after_pivot(steps: list[dict], pivot_index: int) -> dict:
 
 def session_metrics(steps: list[dict], calibrated: bool = True) -> dict:
     """The whole suite for one (session, arm) pair."""
+    if not steps:
+        # A degenerate session (zero scored corrections) is recorded, not crashed on:
+        # one bad capture must never abort a whole Phase F run (review 13 F21).
+        return {"steps": 0, "final_correct": None, "sustained_from": None,
+                "sustained_from_progress": None, "top2_accuracy": None,
+                "accuracy_by_progress": {str(b): None for b in PROGRESS_BINS},
+                "separation_by_progress": {str(b): None for b in PROGRESS_BINS},
+                "early_separation": {"early_steps": 0, "mean_separation": None,
+                                     "locked_by_040": False},
+                "entropy_by_progress": {str(b): None for b in PROGRESS_BINS},
+                "reliability": None}
     final = steps[-1]
     return {
         "steps": len(steps),

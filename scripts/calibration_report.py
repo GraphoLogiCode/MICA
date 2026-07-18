@@ -79,6 +79,12 @@ def _correction_points(directory: str, session_id: str, truth: str,
             delib_mass = sum(belief[(g, 0)] for g in GOALS)
             if delib_mass > 0:
                 weighted_delib = sum(belief[(g, 0)] * table[(g, 0)] for g in GOALS) / delib_mass
+                # the single-goal read of the heuristic term is valid only under the
+                # 09-F4 goal-symmetry invariant — assert it instead of assuming it,
+                # since --heads swaps in arbitrary head versions (review 13 F35)
+                heur_values = [table[(g, 1)] for g in GOALS]
+                assert max(heur_values) - min(heur_values) < 1e-9, (
+                    "heuristic head is not goal-symmetric; the 12-F8 margin is undefined")
                 margins.append(weighted_delib - table[(GOALS[0], 1)])
         belief, _ = correct(belief, table, params)
         marginal = category_marginal(belief)
@@ -139,12 +145,24 @@ def main() -> int:
             # matched nothing after the layout migration, which silently made
             # "held-out" score every session, trained ones included.
             with open(os.path.join(_ROOT, "models", f"heads_{version or 'v1'}.json"), encoding="utf-8") as handle:
-                pinned_holdout = set(json.load(handle)["data"]["held_out_sessions"])
+                model_data = json.load(handle)["data"]
+            pinned_holdout = set(model_data["held_out_sessions"])
+            # The pinned holdout is the training-time VALIDATION set: its real
+            # sessions tuned the temperatures, the (eps, lambda) grid, and the early
+            # stop. They are tuning-exposed, not never-seen, so a held-out
+            # calibration CLAIM must drop them too (review 13 F6 — the fitted
+            # session survived this filter and biased the pass artifact in the
+            # flattering direction).
+            tuning = {s for s in set(model_data.get("validation_sessions",
+                                                    pinned_holdout))
+                      if s.startswith("fabric-")}
             trained = {sid for sid in labels
                        if os.path.exists(_evidence(_RAW, sid, ".source_b.jsonl"))
                        and sid not in pinned_holdout}
-            labels = {sid: meta for sid, meta in labels.items() if sid not in trained}
-            print(f"held-out only: dropped training sessions {sorted(trained)}")
+            labels = {sid: meta for sid, meta in labels.items()
+                      if sid not in trained and sid not in tuning}
+            print(f"held-out only: dropped training sessions {sorted(trained)} "
+                  f"and tuning-validation sessions {sorted(tuning)}")
         directory = _RAW
     else:
         labels_path = os.path.join(_CORPUS, "labels.json")

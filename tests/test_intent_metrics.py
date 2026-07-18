@@ -35,18 +35,40 @@ def test_sustained_from_progress_speaks_build_units():
     assert intent_metrics.sustained_from_progress(never) == 1.0
 
 
-def test_separation_sign_and_falsification():
+def test_separation_sign_and_lock_flag():
     right = _steps([("habitation", 0.6, "habitation", 0.2)])
     wrong = _steps([("defense", 0.6, "habitation", 0.2)])
     # truth at 0.6, nearest other at 0.1 -> +0.5; truth at 0.1, defense 0.6 -> -0.5
     assert intent_metrics.early_separation_verdict(right)["mean_separation"] == 0.5
-    assert intent_metrics.early_separation_verdict(right)["passes"]
+    assert intent_metrics.early_separation_verdict(right)["locked_by_040"]
     assert intent_metrics.early_separation_verdict(wrong)["mean_separation"] == -0.5
-    assert not intent_metrics.early_separation_verdict(wrong)["passes"]
-    # steps past the 40% cutoff do not enter the verdict
+    assert not intent_metrics.early_separation_verdict(wrong)["locked_by_040"]
+    # steps past the 40% cutoff do not enter the margin diagnostic, and a session
+    # that only locks on late is not an early success
     late = _steps([("habitation", 0.9, "habitation", 0.9)])
     assert intent_metrics.early_separation_verdict(late)["early_steps"] == 0
-    assert not intent_metrics.early_separation_verdict(late)["passes"]
+    assert not intent_metrics.early_separation_verdict(late)["locked_by_040"]
+
+
+def test_falsification_is_the_vault_criterion_not_the_mean_margin():
+    # Reconciled 2026-07-16 (review 13 F7 + user decision): the pre-registered
+    # criterion is 06's own words — locks on AND STAYS by 40%, above 1/|G| chance
+    # across held-out sessions (exact binomial). The old mean-margin>0 test passed
+    # traces the vault wording fails; this pins the stricter object.
+    locked = {"sustained_from_progress": 0.2}
+    unlocked = {"sustained_from_progress": 0.9}
+    # 4/4 locked: p = 0.2^4 = 0.0016 < 0.05 -> PASS
+    verdict = intent_metrics.falsification_verdict([locked] * 4, mean_early=0.1)
+    assert verdict["passes"] and verdict["locked_by_040"] == 4
+    assert abs(verdict["p_value"] - 0.2 ** 4) < 1e-6
+    # 2/4 locked: p = P(Bin(4, 0.2) >= 2) ~ 0.1808 -> FAIL, even though a
+    # mean-margin criterion could have passed the same sessions
+    verdict = intent_metrics.falsification_verdict([locked, locked, unlocked, unlocked],
+                                                   mean_early=0.15)
+    assert not verdict["passes"]
+    assert abs(verdict["p_value"] - 0.1808) < 1e-3
+    # zero sessions: no verdict, never a free pass
+    assert not intent_metrics.falsification_verdict([], mean_early=None)["passes"]
 
 
 def test_top2_counts_second_place():

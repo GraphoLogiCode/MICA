@@ -80,6 +80,35 @@ class _GoalReading:
     pose: Pose
 
 
+def _ground_level(built, template: Template, pose: Pose) -> int:
+    """The vertical anchor: which world y the template's dy=0 layer sits at.
+
+    Chosen the way the horizontal offset is chosen — by alignment with what the
+    PLAYER built: every (built cell, template cell) pair sharing a footprint column
+    votes for the anchor that would put that template cell exactly on that built
+    cell, and the most-voted anchor wins (ties go to the lowest, so the answer is
+    deterministic). Reading the player is what makes this safe: the old rule (the
+    lowest built y anywhere) let one stray block below the build sink the whole
+    template into the terrain, where underground stone satisfied its #solid cells
+    — the exact failure the empty-build guard in _read_goal was written to prevent
+    (perception review 2026-07-16, F2). It also anchors correctly when the builder
+    starts high (a treehouse platform before its trunk), which min-y never could.
+    """
+    by_column: dict[tuple[int, int], list[int]] = {}
+    for x, y, z in built:
+        by_column.setdefault((x, z), []).append(y)
+    votes: dict[int, int] = {}
+    for offset in template.cells:
+        dx, dy, dz = rotate_offset(offset, pose.rot)
+        for y in by_column.get((dx + pose.dx, dz + pose.dz), ()):
+            anchor = y - dy
+            votes[anchor] = votes.get(anchor, 0) + 1
+    if not votes:   # no built cell under the registered footprint (fit 0 corner)
+        return min(y for _, y, _ in built)
+    top = max(votes.values())
+    return min(anchor for anchor, count in votes.items() if count == top)
+
+
 def _read_goal(world: ReplayWorld, template: Template, built) -> _GoalReading:
     """comp, edit distance, and fit for one template, all at the one winning pose.
 
@@ -92,7 +121,8 @@ def _read_goal(world: ReplayWorld, template: Template, built) -> _GoalReading:
                             pose=Pose(dx=0, dz=0, rot=0))
     built_fp = {(x, z) for x, _, z in built}
     fit, pose = _fit_pose(built_fp, template)
-    ground = min((y for _, y, _ in built), default=0)   # templates sit on the built layer
+    ground = _ground_level(built, template, pose)
+    pose = Pose(dx=pose.dx, dz=pose.dz, rot=pose.rot, dy=ground)   # one full registration
     satisfied = 0
     template_cells = set()
     for offset, required in template.cells.items():
@@ -174,19 +204,35 @@ def _has_enclosure(built) -> bool:
 
 
 def _symmetry(built) -> tuple[float, int]:
+    """Best mirror-fraction of the built footprint over four vertical planes through
+    its centroid (the two axis-aligned and the two diagonal).
+
+    Everything runs in DOUBLED coordinates: the mirror plane sits at the centroid,
+    which can lie between cells (a half-coordinate), and doubling makes the plane and
+    every reflection an exact integer — no rounding can smear a mirror onto a wrong
+    cell. Reflection across a plane at doubled position c is X -> 2c - X. A diagonal
+    reflection whose result is odd in doubled space lands between cells for real; that
+    cell counts as unmatched, which is the honest reading, not an error.
+
+    (Fixed 2026-07-16, perception review F1: the old axis formulas computed the
+    negated offset from the centroid instead of the reflection, so any build not
+    centered at the origin scored wrong — and the score changed when the same shape
+    was built at different world coordinates.)
+    """
     fp = {(x, z) for x, _, z in built}
     if not fp:
         return 0.0, 0
-    # Doubled coordinates keep mirror cells on the grid when the centroid sits between cells.
-    cx2 = round(sum(2 * x for x, _ in fp) / len(fp))
+    cx2 = round(sum(2 * x for x, _ in fp) / len(fp))   # doubled centroid, exact ints
     cz2 = round(sum(2 * z for _, z in fp) / len(fp))
+    doubled = {(2 * x, 2 * z) for x, z in fp}
     mirrors = (
-        lambda x, z: ((cx2 - 2 * x) // 2, z),                     # plane across x
-        lambda x, z: (x, (cz2 - 2 * z) // 2),                     # plane across z
-        lambda x, z: ((cx2 + 2 * (z - cz2 // 2)) // 2, (cz2 + 2 * (x - cx2 // 2)) // 2),
-        lambda x, z: ((cx2 - 2 * (z - cz2 // 2)) // 2, (cz2 - 2 * (x - cx2 // 2)) // 2),
+        lambda X, Z: (2 * cx2 - X, Z),                  # plane across x (left-right flip)
+        lambda X, Z: (X, 2 * cz2 - Z),                  # plane across z (front-back flip)
+        lambda X, Z: (cx2 - cz2 + Z, cz2 - cx2 + X),    # diagonal (swap the offsets)
+        lambda X, Z: (cx2 + cz2 - Z, cx2 + cz2 - X),    # anti-diagonal
     )
-    best = max(sum(1 for x, z in fp if mirror(x, z) in fp) / len(fp) for mirror in mirrors)
+    best = max(sum(1 for cell in doubled if mirror(*cell) in doubled) / len(fp)
+               for mirror in mirrors)
     return best, len(fp)
 
 

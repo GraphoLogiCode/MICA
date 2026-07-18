@@ -62,14 +62,29 @@ _PIVOT_PAIRS = (("habitation", "defense"), ("production", "decorative"),
                 ("infrastructure", "habitation"), ("defense", "production"),
                 ("decorative", "infrastructure"))
 
-# The training/tuning exposure of each learned arm, for honest grouping. Arm 1 and
-# the v1 heads share the pinned split, so one map serves both.
-# (Cascade A, 2026-07-06: session 001126 became pairs-eligible and entered training —
-# it moves to train-seen; its recognition numbers are no longer generalization.)
-_REAL_TRAIN_SEEN = {"fabric-20260704-232045", "fabric-20260705-002717",
-                    "fabric-20260705-131308", "fabric-20260705-131826",
-                    "fabric-20260706-001126"}
-_REAL_VALIDATION = {"fabric-20260705-134615"}
+def _exposure_groups() -> tuple[set[str], set[str]]:
+    """The real sessions each learned arm has SEEN, read from the model files'
+    own exposure provenance (review 13 F2) — never from a hand-maintained set,
+    which is how six training-exposed sessions once landed in the 'never seen'
+    cell. Both learned arms must agree on the split or the grouping is undefined."""
+    exposures = {}
+    for name in ("heads_v1", "arm1"):
+        path = os.path.join(_ROOT, "models", f"{name}.json")
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)["data"]
+        if "train_sessions_real" not in data:
+            raise SystemExit(
+                f"models/{name}.json predates exposure provenance (review 13 F2) - "
+                "retrain it (scripts/train_arm1.py / train_heads.py) before running "
+                "the four-arm comparison; grouping cannot be trusted without it")
+        exposures[name] = (set(data["train_sessions_real"]),
+                           {s for s in data.get("validation_sessions",
+                                                data["held_out_sessions"])
+                            if s.startswith("fabric-")})
+    assert exposures["heads_v1"] == exposures["arm1"], (
+        "Arm 1 and the v1 heads report different real-session exposure - they no "
+        f"longer share the pinned split: {exposures}")
+    return exposures["heads_v1"]
 
 
 def _flag_value(name: str, default: int) -> int:
@@ -78,9 +93,19 @@ def _flag_value(name: str, default: int) -> int:
     return default
 
 
+def _model_provenance(name: str) -> dict:
+    with open(os.path.join(_ROOT, "models", f"{name}.json"), encoding="utf-8") as handle:
+        meta = json.load(handle)
+    return {"file": f"models/{name}.json", "trained": meta["trained"],
+            "train_sessions_real": meta["data"].get("train_sessions_real"),
+            "knobs": {k: meta[k] for k in ("epsilon", "lambda_g", "lambda_z") if k in meta}}
+
+
 def _floor_dist(fused) -> dict[str, float]:
     """Arm 0: the structure-only argmax as a one-hot (fit-first key, same as the
-    banked floor rows)."""
+    banked floor rows; vault 06 amended 2026-07-16 to pin this exact score — the
+    original match-minus-waste form needs template cell counts that do not exist
+    at the B3 boundary, and fit-first was the form validated on real sessions)."""
     top = max(fused.per_goal, key=lambda g: (fused.per_goal[g].fit, fused.per_goal[g].comp))
     return {goal: 1.0 if goal == top else 0.0 for goal in GOALS}
 
@@ -162,7 +187,7 @@ def _pivot_records(count: int):
     return out
 
 
-def _aggregate(session_rows: list[dict]) -> dict:
+def _aggregate(session_rows: list[dict], pooled_steps: list[dict]) -> dict:
     """Mean the per-session curves and rates for one (group, arm) cell."""
     def curve_mean(key):
         merged = {}
@@ -173,8 +198,15 @@ def _aggregate(session_rows: list[dict]) -> dict:
 
     early = [r["early_separation"]["mean_separation"] for r in session_rows
              if r["early_separation"]["mean_separation"] is not None]
-    eces = [r["reliability"]["ece"] for r in session_rows if r["reliability"]]
     mean_early = round(statistics.mean(early), 4) if early else None
+    # ECE is pooled-then-binned (review 13 F8): per-session ECEs on a handful of
+    # steps carry a positive noise floor that differs BY ARM, so a mean of them
+    # ranks confidence-spread geometry, not calibration. The per-session mean is
+    # kept only as a dispersion diagnostic, under a name that cannot be mistaken
+    # for ECE.
+    pooled_ece = (intent_metrics.reliability(pooled_steps)["ece"]
+                  if pooled_steps else None)
+    session_eces = [r["reliability"]["ece"] for r in session_rows if r["reliability"]]
     return {
         "sessions": len(session_rows),
         "final_accuracy": round(statistics.mean(r["final_correct"] for r in session_rows), 3),
@@ -186,13 +218,15 @@ def _aggregate(session_rows: list[dict]) -> dict:
         "separation_by_progress": curve_mean("separation_by_progress"),
         "accuracy_by_progress": curve_mean("accuracy_by_progress"),
         "entropy_by_progress": curve_mean("entropy_by_progress"),
-        "mean_ece": round(statistics.mean(eces), 4) if eces else None,
-        "falsification": {
-            "criterion": f"mean separation > 0 before "
-                         f"{intent_metrics.FALSIFICATION_PROGRESS:.0%} of the build",
-            "mean_early_separation": mean_early,
-            "passes": mean_early is not None and mean_early > 0.0,
-        },
+        "pooled_ece": pooled_ece,
+        "per_session_ece_mean_DISPERSION_ONLY": (
+            round(statistics.mean(session_eces), 4) if session_eces else None),
+        # The pre-registered criterion, in vault 06's own words (reconciled
+        # 2026-07-16, review 13 F7 + user decision): a session counts as an early
+        # success iff the top-1 call locks onto the truth AND STAYS there by 40% of
+        # the build; the arm passes iff the success count beats 1/|G| chance under
+        # an exact one-sided binomial test. Mean margin stays as a diagnostic only.
+        "falsification": intent_metrics.falsification_verdict(session_rows, mean_early),
     }
 
 
@@ -241,10 +275,10 @@ def _figures(report: dict) -> list[str]:
     group = groups[0] if groups else None
     if group:
         for arm in arm_names:
-            rel = report["groups"][group].get(arm, {}).get("mean_ece")
+            rel = report["groups"][group].get(arm, {}).get("pooled_ece")
             if rel is not None:
                 axis.bar(arm, rel)
-        axis.set_title(f"mean ECE per arm — {group} (lower = better calibrated)", fontsize=9)
+        axis.set_title(f"pooled ECE per arm — {group} (lower = better calibrated)", fontsize=9)
         axis.tick_params(axis="x", labelsize=6, rotation=20)
     figure.tight_layout()
     out = os.path.join(_RAW, "arms_calibration.png")
@@ -283,9 +317,18 @@ def main() -> int:
         scripted_labels = json.load(handle)
 
     groups: dict[str, dict[str, list]] = {}
+    pooled: dict[str, dict[str, list]] = {}    # raw steps per (group, arm) — pooled ECE
     per_session: dict[str, dict] = {}
+    skipped: list[str] = []
 
     def run_one(group: str, session_id: str, fused, truths):
+        if not fused:
+            # zero scored corrections: record and skip — one degenerate capture must
+            # never abort the whole comparison run (review 13 F17/F21)
+            skipped.append(session_id)
+            per_session[session_id] = {"group": group, "skipped": "no scored corrections"}
+            print(f"  {session_id} SKIPPED (no scored corrections)")
+            return None
         steps = _session_steps(fused, truths, arms, arm2, idle_every)
         per_session[session_id] = {"group": group}
         for arm_name, arm_steps in steps.items():
@@ -295,6 +338,8 @@ def main() -> int:
                 "final_correct": metrics["final_correct"],
                 "sustained_from": metrics["sustained_from"]}
             groups.setdefault(group, {}).setdefault(arm_name, []).append(metrics)
+            if arm_name != "arm0_reactive":    # one-hot floor stays out of calibration
+                pooled.setdefault(group, {}).setdefault(arm_name, []).extend(arm_steps)
         return steps
 
     print("scripted corpus (assigned layout) ...")
@@ -305,10 +350,11 @@ def main() -> int:
         print(f"  {session_id} [{label['goal']}] ({group})")
 
     print("real captures (free choice / template) ...")
+    train_seen, validation_set = _exposure_groups()
     for session_id, meta in real_labeled_sessions().items():
         fused = _load_banked(session_store.session_dir(session_id), session_id)
-        group = ("real_train_seen" if session_id in _REAL_TRAIN_SEEN
-                 else "real_validation" if session_id in _REAL_VALIDATION
+        group = ("real_train_seen" if session_id in train_seen
+                 else "real_validation" if session_id in validation_set
                  else "real_never_seen")
         run_one(group, session_id, fused, [meta["goal"]] * len(fused))
         print(f"  {session_id} [{meta['goal']}] ({group})")
@@ -317,7 +363,14 @@ def main() -> int:
     pivot_rows = []
     for session_id, fused, truths, truth in _pivot_records(pivot_count):
         steps = run_one("pivot", session_id, fused, truths)
-        pivot_index = next(i for i, t in enumerate(truths) if t == truth["goal_b"])
+        pivot_index = next((i for i, t in enumerate(truths) if t == truth["goal_b"]), None)
+        if steps is None or pivot_index is None or pivot_index == 0:
+            # a seam with no records on one side: skip-and-record, never fake a
+            # recovery row (review 13 F23)
+            pivot_rows.append({"session": session_id, "skipped": "degenerate seam",
+                               "goal_a": truth["goal_a"], "goal_b": truth["goal_b"]})
+            print(f"  {session_id} SKIPPED (degenerate seam)")
+            continue
         row = {"session": session_id, "goal_a": truth["goal_a"], "goal_b": truth["goal_b"]}
         for arm_name, arm_steps in steps.items():
             row[arm_name] = intent_metrics.recovery_after_pivot(arm_steps, pivot_index)
@@ -333,7 +386,10 @@ def main() -> int:
                       f"events + every {idle_every}th idle step, held between",
                       "queries": arm2.queries, "cache_hits": arm2.cache_hits,
                       "unusable_replies": arm2.unusable}),
-            "arm3_v1": "models/heads_v1.json (trained 2026-07-05, jointly fitted knobs)",
+            # provenance is READ from the model file, never hardcoded — a stale
+            # training-date string once masked the exposure staleness (review 13 F34)
+            "arm3_v1": (_model_provenance("heads_v1")
+                        if heads_v1.available() else None),
             "arm1_training_history": [
                 "config 1 (256/64 hidden, decay 1e-4, lr 1e-3): best held-out NLL at "
                 "epoch 0, diverged to 9.6 — memorized train sessions immediately",
@@ -349,11 +405,13 @@ def main() -> int:
                 "arm0 is one-hot by construction and excluded from calibration",
             ],
         },
-        "groups": {group: {arm_name: _aggregate(rows)
+        "groups": {group: {arm_name: _aggregate(
+                               rows, pooled.get(group, {}).get(arm_name, []))
                            for arm_name, rows in arm_rows.items()}
                    for group, arm_rows in groups.items() if group != "pivot"},
         "pivot_recovery": pivot_rows,
         "per_session": per_session,
+        "skipped_sessions": skipped,
     }
     out = os.path.join(_RAW, "arms_report.json")
     with open(out, "w", encoding="utf-8") as handle:
@@ -372,9 +430,11 @@ def main() -> int:
             falsification = cell["falsification"]
             print(f"    {arm_name:<16} acc {cell['final_accuracy']:.3f}"
                   f"  sustained@build {cell['mean_sustained_from_progress']:.3f}"
-                  f"  early-sep {falsification['mean_early_separation']}"
+                  f"  locked-by-40% {falsification['locked_by_040']}/{falsification['sessions']}"
+                  f" (p={falsification['p_value']})"
                   f"  [{'PASS' if falsification['passes'] else 'FAIL'}]"
-                  + (f"  ECE {cell['mean_ece']}" if cell["mean_ece"] is not None else ""))
+                  + (f"  pooled-ECE {cell['pooled_ece']}"
+                     if cell["pooled_ece"] is not None else ""))
     print(f"  -> {os.path.relpath(out, _ROOT)} + {len(figures)} figures")
     return 0
 

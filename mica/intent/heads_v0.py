@@ -12,8 +12,9 @@ blanks exactly the 2D channels, so the behavior stream's contribution is measura
 
 The four D3 head constraints, honored by construction:
   1. Goal symmetry — the heuristic head takes NO goal argument; it reads only the
-     goal-free channels (streak, dwell). s_goal and per_goal reach the deliberative
-     head only.
+     goal-free dwell channel (the placing streak is a deliberative-side GAIN only —
+     it never reaches this head; review 13 F29 corrected the older claim). s_goal
+     and per_goal reach the deliberative head only.
   2. a_hat_conf never multiplies into a likelihood (it is not read at all).
   3. s_goal arrives as raw cosines; a small weight scales it.
   4. comp enters only jointly with fit (the product), never alone.
@@ -129,8 +130,13 @@ def deliberative(evidence: FusedEvidence, goal: str) -> dict:
     if shape is not None:
         # The learned Uni3D shape readout — what the geometry itself says the build is
         # becoming. g-indexed (trained on goal labels), so deliberative-only; CENTERED
-        # so it is zero-sum across goals: it discriminates between goals and cannot
-        # shift the base action rates (the balance law).
+        # so it is zero-INFORMATION in logit space: it discriminates between goals.
+        # Honesty note (review 13 F16): centering does NOT make it rate-preserving —
+        # softmax is convex, so even pure zero-sum noise here lifts the goal-averaged
+        # P(PLACE) second-order (measured 0.0657 -> 0.0747 at sigma=1), reading as
+        # spurious deliberative-mode evidence. The ramp_in x unanchored gates below
+        # bound the term; a noisy readout still tilts P(z) slightly and that residual
+        # is accepted and recorded, not denied.
         #
         # Its measured reliability window (h3d_linear_probe.json) sets two goal-free
         # gates: near-chance on the smallest clouds (0.3 at the 10% bin — a couple of
@@ -154,8 +160,9 @@ def deliberative(evidence: FusedEvidence, goal: str) -> dict:
 
 
 def heuristic(evidence: FusedEvidence) -> dict:
-    """P(a | e, z=1): autopilot. Reads only the goal-free channels — the signature has
-    no goal argument, which is the identifiability guarantee."""
+    """P(a | e, z=1): autopilot. Reads only the goal-free dwell channel (via
+    _base_logits) plus a constant placing bump — the signature has no goal argument,
+    which is the identifiability guarantee."""
     logits = _base_logits(evidence)
     logits[MacroAction.PLACE] += 0.9   # habitual placing, unconditioned on any goal
     return _softmax(logits)
@@ -163,6 +170,11 @@ def heuristic(evidence: FusedEvidence) -> dict:
 
 def likelihood(evidence: FusedEvidence, action: MacroAction) -> Belief:
     """The full L_k(g, z) = P(a_k | e_k, g, z) the tracker corrects with."""
+    if action == MacroAction.SCAFFOLD:
+        # v1 folds SCAFFOLD into PLACE (features.action_index); this arm must agree,
+        # or a future segmenter emitting SCAFFOLD crashes one arm of the comparison
+        # while the other keeps running (review 13 F28).
+        action = MacroAction.PLACE
     heuristic_p = heuristic(evidence)[action]
     result = {}
     for goal in GOALS:

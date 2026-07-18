@@ -308,10 +308,20 @@ def _readout(posterior, offsets, p_hat, gamma, np):
 
 def _filter_score(tables, offsets_vec, p_hat_vec, w2, w3, gamma,
                   epsilon, lambda_g, lambda_z, np):
+    """One-step predictive NLPD through the actual filter — RENORMALIZED over the
+    action set (fusion review 2026-07-16, F1). With exponents in play the raw
+    normalizer Z_k is not a probability of anything: raising a table to w < 1
+    inflates every entry, so raw -log Z_k rewards small exponents regardless of
+    prediction quality (the 07-13 sweep's entire top-20 was the minimum-exponent
+    scale class for exactly this reason). Scoring Z(a_obs) / sum_a Z(a) restores a
+    proper score for every configuration, and at w=1, gamma=0 it equals the old
+    objective exactly (the v1 sweep's tables are proper distributions there)."""
     from mica.intent.tracker import (TrackerParams, category_marginal, correct,
                                      predict, uniform_belief)
 
     params = TrackerParams(lambda_g=lambda_g, lambda_z=lambda_z, epsilon=epsilon)
+    action_count = params.action_count
+    floor = epsilon / action_count
     log_scores, finals = [], []
     for session_id, rows in tables.items():
         belief = uniform_belief()
@@ -320,19 +330,31 @@ def _filter_score(tables, offsets_vec, p_hat_vec, w2, w3, gamma,
             dt = max(row["tick"] - previous_tick, 1) / 20.0
             previous_tick = row["tick"]
             belief = predict(belief, dt, params)
-            heur = (row["heur2"][row["target"]] ** w2) * (row["heur3"][row["target"]] ** w3)
             factor = (_readout(row["posterior"], offsets_vec, p_hat_vec, gamma, np)
                       if row["events"] else None)
-            like = {}
-            for gi, goal in enumerate(GOALS):
-                delib = ((row["delib2"][goal][row["target"]] ** w2)
-                         * (row["delib3"][goal][row["target"]] ** w3))
-                if factor is not None:
-                    delib *= float(factor[gi])
-                like[(goal, 0)] = delib
-                like[(goal, 1)] = heur
-            belief, normalizer = correct(belief, like, params)
-            log_scores.append(math.log(normalizer))
+            # the fused table for EVERY action, floored exactly as correct() floors
+            # it, so Z(a) below is what the filter would normalize by if a were
+            # the observed action
+            z_per_action = []
+            like_obs = {}
+            for action in range(action_count):
+                z = 0.0
+                heur = (row["heur2"][action] ** w2) * (row["heur3"][action] ** w3)
+                heur_f = (1.0 - epsilon) * heur + floor
+                for gi, goal in enumerate(GOALS):
+                    delib = ((row["delib2"][goal][action] ** w2)
+                             * (row["delib3"][goal][action] ** w3))
+                    if factor is not None:
+                        delib *= float(factor[gi])
+                    if action == row["target"]:
+                        like_obs[(goal, 0)] = delib
+                        like_obs[(goal, 1)] = heur
+                    z += belief[(goal, 0)] * ((1.0 - epsilon) * delib + floor)
+                    z += belief[(goal, 1)] * heur_f
+                z_per_action.append(z)
+            predictive = z_per_action[row["target"]] / sum(z_per_action)
+            log_scores.append(math.log(predictive))
+            belief, _ = correct(belief, like_obs, params)
         marginal = category_marginal(belief)
         finals.append(max(marginal, key=marginal.get) == rows[-1]["goal"])
     return -sum(log_scores) / len(log_scores), sum(finals) / len(finals)
@@ -365,13 +387,23 @@ def main() -> int:
     print(f"  vocab {len(vocab)} items   train samples with inventory: {with_inventory}")
     print(f"  held-out sessions: {', '.join(held_sessions)}")
 
-    # Laplace-smoothed class prior of the readout backbone's training distribution
-    # (review F4): arm1 trains on this same pair universe.
+    # The scaled-likelihood divisor is the prior the classifier's posterior is
+    # CALIBRATED UNDER — and arm1 trains class-balanced (F7c), which makes its
+    # effective training prior uniform by construction. Dividing by the raw pair
+    # counts instead (the pre-2026-07-16 behavior) injected a spurious per-category
+    # tilt of up to ~21x (production 0.44 vs decorative 0.02) into every event
+    # correction's readout factor (fusion review 2026-07-16, F2). The measured
+    # corpus counts are still printed for the report — as diagnostics, never as
+    # the divisor, unless the backbone ever stops being class-balanced.
     counts = {g: 0 for g in GOALS}
     for s in train:
         counts[s.goal] += 1
-    p_hat = {g: (counts[g] + 1) / (len(train) + len(GOALS)) for g in GOALS}
-    print("  p_hat (Laplace):", {g: round(v, 4) for g, v in p_hat.items()})
+    corpus_prior = {g: (counts[g] + 1) / (len(train) + len(GOALS)) for g in GOALS}
+    p_hat = {g: 1.0 / len(GOALS) for g in GOALS}
+    print("  p_hat: uniform (class-balanced backbone; scaled-likelihood divisor "
+          "must match the training prior)")
+    print("  corpus prior (diagnostic only):",
+          {g: round(v, 4) for g, v in corpus_prior.items()})
 
     t_train = _featurize(train, vocab, th, device)
     t_val = _featurize(validation, vocab, th, device)
@@ -466,7 +498,8 @@ def main() -> int:
         "c_gamma": round(len(GOALS) ** chosen["gamma"], 4),
         "goal_offsets": offsets,
         "p_hat": {g: round(v, 6) for g, v in p_hat.items()},
-        "readout_backbone": "arm1 (frozen, F7c)",
+        "corpus_prior_diagnostic": {g: round(v, 6) for g, v in corpus_prior.items()},
+        "readout_backbone": "arm1 (frozen, F7c; class-balanced => p_hat uniform)",
         "epsilon": chosen["epsilon"],
         "lambda_g": chosen["lambda_g"],
         "lambda_z": chosen["lambda_z"],

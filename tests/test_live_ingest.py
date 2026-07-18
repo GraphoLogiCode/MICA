@@ -1,6 +1,7 @@
 """The live ingest layer: raw socket moments become strictly tick-ordered packets.
 Covers the reorderer's contract (order restored within the hold, first arrival wins,
 holes counted honestly) and the dict→packet parse parity with the JSONL reader."""
+import dataclasses
 import io
 
 from mica.capture.jsonl_ingest import packet_from_dict
@@ -9,6 +10,10 @@ from mica.capture.live_stream import read_moments
 from mica.capture.sample_builds import wall_row_build
 from mica.capture.synthetic import generate_session
 from mica.capture.wire_synthetic import session_wire
+from mica.contracts.b0 import (
+    BlockEvent, BlockOp, BlockPos, ClientObservation, CrosshairTarget, FrameRef,
+    InputState, ObservationPacket, PlayerPos, ServerObservation,
+)
 from mica.contracts.serialize import packet_to_dict
 
 
@@ -25,6 +30,64 @@ def test_packet_round_trips_through_dict_form():
     # packet_from_dict — the two must be exact inverses or every live test lies
     for packet in _session().packets:
         assert packet_from_dict(packet_to_dict(packet)) == packet
+
+
+def test_packet_round_trip_preserves_inventory():
+    # generate_session/wall_row_build never populate inventory (it's sparse and
+    # optional), so the loop above alone can't catch packet_to_dict dropping it —
+    # that gap is exactly how it went missing (F1, 2026-07-16 review). Force it onto
+    # one packet so the round trip actually exercises the field.
+    packet = _session().packets[0]
+    with_inventory = dataclasses.replace(packet, client=dataclasses.replace(
+        packet.client, inventory=(("minecraft:oak_planks", 64), ("minecraft:torch", 3))))
+    assert packet_from_dict(packet_to_dict(with_inventory)) == with_inventory
+
+
+def _maximal_packet() -> ObservationPacket:
+    """Every optional field filled, every tuple non-empty — the packet that exercises
+    ALL of the serializer, which the session fixtures never do (they leave the sparse
+    fields None, which is how F1 hid)."""
+    client = ClientObservation(
+        capture_wallclock_ms=123.5,
+        pov_frame=FrameRef(path="frames/7.png", width=320, height=172),
+        input_state=InputState(keys=("forward", "jump"), mouse_buttons=("right",),
+                               mouse_dx=1.5, mouse_dy=-0.5),
+        yaw=-193.25,
+        pitch=42.0,
+        crosshair_target=CrosshairTarget(block_pos=BlockPos(3, 64, -2), face="top",
+                                         entity="minecraft:sheep"),
+        held_item="minecraft:oak_planks",
+        hotbar=("minecraft:oak_planks", "minecraft:torch"),
+        gui_open=True,
+        inventory=(("minecraft:oak_planks", 64), ("minecraft:torch", 3)),
+    )
+    server = ServerObservation(
+        player_pos=PlayerPos(0.5, 64.0, -1.5),
+        block_events=(BlockEvent(event_id=0, pos=BlockPos(3, 64, -2),
+                                 block_type="minecraft:oak_planks",
+                                 op=BlockOp.PLACE, actor="HumanBuilder"),),
+        inventory_delta=(("minecraft:oak_planks", -1),),
+        dimension="overworld",
+        biome="plains",
+    )
+    return ObservationPacket(tick=7, wallclock_ms=350, client=client, server=server)
+
+
+def test_maximal_packet_round_trip_covers_every_field():
+    # The structural tripwire behind F1 (2026-07-16 review, question 1): the same
+    # field has now twice been added to one side of the schema and not the other.
+    # Guard 1: this fixture must actually cover every field — adding a field to
+    # either dataclass breaks the test here until the fixture sets it. Guard 2: the
+    # fully-populated packet must survive the round trip exactly, so a serializer
+    # missing any field cannot pass.
+    packet = _maximal_packet()
+    for half in (packet.client, packet.server):
+        for field in dataclasses.fields(half):
+            value = getattr(half, field.name)
+            assert value is not None, f"maximal fixture leaves {field.name} unset"
+            if isinstance(value, tuple):
+                assert value, f"maximal fixture leaves {field.name} empty"
+    assert packet_from_dict(packet_to_dict(packet)) == packet
 
 
 def test_in_order_stream_passes_straight_through():

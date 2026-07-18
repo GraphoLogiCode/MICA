@@ -22,11 +22,19 @@ ROTATIONS = (0, 90, 180, 270)   # the yaw poses registration searches (no mirror
 
 @dataclass(frozen=True)
 class Pose:
-    """Where and which way round a template best fits: a footprint offset plus a yaw."""
+    """Where and which way round a template best fits: a footprint offset, a yaw,
+    and the vertical anchor level.
+
+    dy joined 2026-07-16 (perception review F2): the level the template's origin
+    layer sits at is part of the registration, chosen by aligning template cells
+    with PLAYER-BUILT cells — never by the lowest built cell alone, which let one
+    stray low block sink the whole template into the terrain. Defaulted so records
+    from before the change still parse (they read dy = 0)."""
 
     dx: int
     dz: int
-    rot: int   # one of ROTATIONS
+    rot: int      # one of ROTATIONS
+    dy: int = 0   # world y of the template's dy=0 layer
 
 
 @dataclass(frozen=True)

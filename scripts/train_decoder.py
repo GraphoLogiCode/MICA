@@ -305,7 +305,30 @@ def main() -> int:
                              epochs=_STAGE_B_EPOCHS, patience=_STAGE_B_PATIENCE,
                              learning_rate=_STAGE_B_LR, label="stage B")
 
+    # WHICH stage ships to decoder_v1.pt is an ADJUDICATED decision, not a training
+    # side effect: on 2026-07-16 this line shipped stage B unconditionally and
+    # silently reverted the user's recorded 07-13 stage-A pin (review 2026-07-17
+    # F2). The pin file is the decision's executable home — a retrain may ship the
+    # pinned stage, but flipping stages requires re-running run_decoder_eval's OQ1
+    # adjudication and updating the pin, never a silent default.
+    pin_path = os.path.join(_ROOT, "models", "decoder_stage_pin.json")
+    ship_stage = "b" if stage_b is not None else "a"
+    if os.path.exists(pin_path):
+        with open(pin_path, encoding="utf-8") as handle:
+            pin = json.load(handle)
+        if pin["ship_stage"] == "a" and stage_b is not None:
+            print(f"  stage pin: shipping STAGE A per models/decoder_stage_pin.json "
+                  f"({pin['by'][:60]}...) — stage B kept aside for re-adjudication")
+            model.load_state_dict(torch.load(decoder_model.STAGE_A_PATH,
+                                             map_location=device))
+            ship_stage = "a"
+        elif pin["ship_stage"] == "b" and stage_b is None:
+            raise SystemExit("stage pin says ship B but --stage-a-only trained no "
+                             "stage B — re-adjudicate or drop the flag")
     torch.save(model.state_dict(), decoder_model.WEIGHTS_PATH)
+    print(f"  shipped stage {ship_stage.upper()} to decoder_v1.pt "
+          f"(pin: {'present' if os.path.exists(pin_path) else 'none — run '
+          'run_decoder_eval to adjudicate'})")
     with open(os.path.join(decoder_corpus.CORPUS_DIR,
                            "decoder_corpus_report.json"), encoding="utf-8") as handle:
         corpus_report = json.load(handle)

@@ -23,10 +23,25 @@ internal supervisor; three stages, each measurement-gated; intention recognition
   Tests cover every tier + window edges + negative lift; pre-D9 sessions report n=0 gracefully.
 - [x] **run_decoder_eval re-adjudication launched** (user decision: re-adjudicate the 07-13
   stage-A pin after tonight's retrain clobbered it) -- verdict lands in decoder_report.json.
-- [ ] **Parked, pending user direction**: the action-safety review's provenance interlocks
-  (gate_v1 stamps + LiveGateRunner refusal + --place/--heads coupling + executable stage pin)
-  were interrupted mid-edit by the D9 direction conversation; none are needed for
-  advisory-only sessions.
+- [x] **Re-adjudication verdict (2026-07-17): OQ1 PASSES for the first time** on the
+  leak-free models + regenerated corpus (B 1.6372 < A 1.66; coherence kept; h4 tau-acc
+  0.7432) -- stage B (MTP) earns the live slot by the pre-registered rule. The stage
+  decision is now EXECUTABLE: models/decoder_stage_pin.json (with full history incl.
+  the 07-16 silent clobber) + train_decoder.py refuses to flip stages without it.
+- [x] **Gate re-frozen against tonight's models** (run_decoder_eval + run_gate):
+  delta_hat 0.2295 s, theta_1 0.45, c_min 0.9, theta_suggest 0.338 / theta_place 0.438
+  (review predicted ~0.34/0.44); counterfactual criteria ALL PASS. Honest consequence:
+  theta_place (0.438) > validation conf max (0.427) -- placement is a-priori
+  UNREACHABLE until calibration improves (D9 Stage 1), exactly as the review's
+  question 2 anticipated. Advisory suggestions now fire at a calibrated-percentile
+  rate instead of the stale 37%.
+- [x] **Advisory-safe body fixes committed** (ecec637): A7 name refusal, stop-anywhere
+  + stopDigging, A7-test interlock, farmland avoidance, nearestHuman.
+- [ ] **Still TODO before any --place session**: the freeze's monotonicity gate
+  (reject thetas whose selected-reads accuracy is below rejected-reads accuracy),
+  gate_v1 provenance stamps + LiveGateRunner refusal, --place/--heads coupling,
+  persistent stop across relaunch (F6), and the gather/materials majors (F4, F10,
+  F11, F16, F17).
 
 ---
 

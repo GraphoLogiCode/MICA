@@ -548,6 +548,16 @@ function start(port) {
           bot.lookAt(new Vec3(gx + 0.5, gy + 0.5, gz + 0.5)).catch(() => {});
         }
       }
+      // The acceptance signal's VOICING record (D9 §3): a suggestion only counts
+      // as suggested if this throttled line actually reached the human. The mind
+      // cannot know that (the 30 s throttle lives here), so the body logs each
+      // voicing; the offline join (scripts/suggestion_acceptance.py) matches these
+      // lines to trace rows and to the human's next placements.
+      fs.appendFile(path.join(RAW_DIR, `agent-${NAME}.voiced.jsonl`),
+        JSON.stringify({ ts: now, state: gate.state,
+                         summary: gate.proposal_summary || null,
+                         conf: gate.conf != null ? gate.conf : null,
+                         cell: gate.target_cell || null }) + '\n', () => {});
       lastAction = `gate: ${gate.state}`;
     } else if (gate.state === 'gather' && gate.gather && !gathering && !gatherStopped
                && agentState === 'present') {

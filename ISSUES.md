@@ -9,6 +9,27 @@
 
 ---
 
+# 🎯 D9 ACTING LAYER + SUGGESTION-ACCEPTANCE SIGNAL (2026-07-17)
+
+Vault note: `MICA System Design/D9 - Acting Layer - Calibrated Autonomy and the Acceptance Signal.md`
+(user direction: real-life assistance, not a supervisor -- calibrated uncertainty becomes the
+internal supervisor; three stages, each measurement-gated; intention recognition unchanged as thesis).
+
+- [x] **Suggestion-acceptance logging landed** (D9 section 3, pre-registered definitions v1):
+  gate trace rows carry `proposal_first` on every proposal-bearing read (the unvoiced CONTROL
+  group); agent.js logs each actually-voiced advisory to `agent-<NAME>.voiced.jsonl` (the 30 s
+  throttle lives body-side); `mica/validation/suggestion_acceptance.py` + script compute
+  followed exact/near/type, contradicted, ignored, and the LIFT vs the unvoiced base rate.
+  Tests cover every tier + window edges + negative lift; pre-D9 sessions report n=0 gracefully.
+- [x] **run_decoder_eval re-adjudication launched** (user decision: re-adjudicate the 07-13
+  stage-A pin after tonight's retrain clobbered it) -- verdict lands in decoder_report.json.
+- [ ] **Parked, pending user direction**: the action-safety review's provenance interlocks
+  (gate_v1 stamps + LiveGateRunner refusal + --place/--heads coupling + executable stage pin)
+  were interrupted mid-edit by the D9 direction conversation; none are needed for
+  advisory-only sessions.
+
+---
+
 # 🧠 BELIEF-TRACKER FULL-STACK REVIEW FIX PASS (2026-07-16, night)
 
 Vault note: `MICA Intent Belief Tracker/13 - Belief Tracker Full-Stack Review (mica-review).md`

@@ -339,6 +339,16 @@ class LiveGateRunner:
                "feasible_prefix": (self._materials_block or {}).get("feasible_prefix"),
                "missing": (self._materials_block or {}).get("missing"),
                "gather": self._gather_block,   # schema-additive (D5 §4 amendment)
+               # The decoder's first proposed placement, recorded on EVERY read that
+               # has one — voiced or not. This is what makes the acceptance signal's
+               # CONTROL group computable (D9 §3): reads where a proposal existed
+               # but was never surfaced give the base rate at which the human does
+               # the proposed thing anyway. Schema-additive.
+               "proposal_first": ({"block": materials.normalize(proposal.actions[0].block),
+                                   "cell": list(target)}
+                                  if (proposal is not None and target is not None
+                                      and isinstance(proposal.actions[0], Place))
+                                  else None),
                # The auditor judges each trace by its own recorded authority: demo
                # traces must show zero placements, place traces at most 1 per read.
                "authority": "place" if self.place else "demo",

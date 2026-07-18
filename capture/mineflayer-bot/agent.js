@@ -56,6 +56,16 @@ const Vec3 = require('vec3');
 const HOST = process.env.MICA_HOST || '127.0.0.1';
 const VERSION = process.env.MICA_VERSION || '1.16.5';
 const NAME = process.env.MICA_AGENT_NAME || 'MICA_AI';
+// A7 depends on the body's own blocks being attributable to the AGENT (MICA_AI or
+// MICA_AI_<n>), so the evidence filters exclude them. A name that does not match
+// that shape would make every block the body places read as HUMAN evidence — the
+// belief confirming itself through the agent's own hand (review 2026-07-17 F7).
+// Refuse to start rather than silently poison a whole session's evidence.
+if (!/^MICA_AI(_.*)?$/.test(NAME)) {   // exactly is_agent_actor()'s rule (contracts/b0.py)
+  console.error(`[agent] MICA_AGENT_NAME='${NAME}' is not MICA_AI or MICA_AI_<suffix>; `
+    + 'the A7 evidence filter would tag this body as human. Refusing to join.');
+  process.exit(1);
+}
 const VIEWER_PORT = parseInt(process.env.MICA_VIEWER_PORT || '3007', 10);
 const FLOWVIZ_DIR = process.env.MICA_FLOWVIZ_DIR || 'D:\\2026projects\\mica-flowviz';
 const FLOWVIZ_PORT = parseInt(process.env.MICA_FLOWVIZ_PORT || '8321', 10);
@@ -162,13 +172,20 @@ function start(port) {
 
   function nearestHuman() {
     // bot.players is undefined until login completes; the status writer runs
-    // from tick one, so this must tolerate the pre-login state.
+    // from tick one, so this must tolerate the pre-login state. With more than
+    // one human in the world, follow/gaze must bind to the NEAREST, not an
+    // arbitrary map-order player (review 2026-07-17 F26).
     const players = bot.players || {};
+    const me = bot.entity && bot.entity.position;
+    let best = null;
+    let bestDist = Infinity;
     for (const name of Object.keys(players)) {
       const player = players[name];
-      if (!isAgentName(name) && player && player.entity) return player;
+      if (isAgentName(name) || !player || !player.entity) continue;
+      const d = me ? me.distanceTo(player.entity.position) : 0;
+      if (d < bestDist) { bestDist = d; best = player; }
     }
-    return null;
+    return best;
   }
 
   function nearestDroppedItem(me) {
@@ -771,12 +788,20 @@ function start(port) {
   bot.on('chat', (username, message) => {
     if (username === NAME) return;
     const said = String(message).trim().toLowerCase();
-    if (/^stop\b/.test(said)) {
+    // Match "stop" ANYWHERE ("please stop", "mica stop", "STOP IT"), but not a
+    // negation ("don't stop") — human panic phrasing, not just the announced word
+    // (review 2026-07-17 F24). The announcements still say "say stop to cancel".
+    if (/\bstop\b/.test(said) && !/\b(don'?t|do not|never|no need to)\s+stop\b/.test(said)) {
       if (gathering || placing) bot.chat('Stopping — errand dropped.');
       gathering = null;
       placing = null;
       gatherStopped = true;
       placeStopped = true;   // one word halts every autonomous world change
+      // Abort an in-flight dig too: the errand pointer is cleared above, but a
+      // bot.dig() already awaiting completion keeps mining for up to seconds
+      // otherwise — the "halts instantly" contract must cover the swing already
+      // underway (review 2026-07-17 F5).
+      try { bot.stopDigging(); } catch (e) { /* not digging */ }
       try { bot.pathfinder.setGoal(null); } catch (e) { /* mid-respawn */ }
       return;
     }
@@ -976,6 +1001,18 @@ function start(port) {
     movements.allow1by1towers = false;
     movements.scafoldingBlocks = [];
     movements.placeCost = 1000000;      // belt and braces: placing is never worth it
+    // The pathfinder cannot dig or place, but vanilla physics let a jumping/falling
+    // player TRAMPLE farmland to dirt (popping the crop) — a world change the "never
+    // change the world" config otherwise misses, and possibly an unlogged D2
+    // divergence (review 2026-07-17 F15). Steer paths off farmland and crops.
+    try {
+      const avoid = ['farmland', 'wheat', 'carrots', 'potatoes', 'beetroots',
+        'melon_stem', 'pumpkin_stem', 'sweet_berry_bush'];
+      for (const name of avoid) {
+        const block = bot.registry && bot.registry.blocksByName[name];
+        if (block) movements.blocksToAvoid.add(block.id);
+      }
+    } catch (e) { /* registry shape varies by mineflayer version; best-effort */ }
     bot.pathfinder.setMovements(movements);
 
     // Tracking loops at 4 Hz (was 1/0.67 Hz — visibly laggy): both read live entity
@@ -1033,7 +1070,21 @@ function start(port) {
       startViewer([VIEWER_PORT, VIEWER_PORT + 1, VIEWER_PORT + 2]);
     }
 
-    if (process.env.MICA_A7_TEST === '1') setTimeout(a7TestPlacement, 10000);
+    // The A7 smoke test places three ungated stone blocks 10 s after spawn. It is
+    // a manual-rig check ONLY — an env var left set from a past smoke run must not
+    // fire ungated placements into a real gated capture (review 2026-07-17 F25).
+    // Guard: skip (loudly) if a live gate is already driving this session.
+    if (process.env.MICA_A7_TEST === '1') {
+      setTimeout(() => {
+        const live = readLiveStatus();
+        if (live && live.gate) {
+          console.log(`[${NAME}] A7 smoke test SKIPPED — a live gated session is `
+            + 'running (unset MICA_A7_TEST for real captures).');
+          return;
+        }
+        a7TestPlacement();
+      }, 10000);
+    }
   });
 
   bot.on('error', (err) => console.error(`[${NAME}] error:`, err.message));

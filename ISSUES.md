@@ -2634,3 +2634,30 @@ question re-asks on the fixed pipeline; v1 is history, not precedent.
   failure (never-seen floor 0.050) lives off-template. The v1 counter-lesson
   (anti-associations from mislabeled evidence) stands as the risk the rule
   tests against.
+
+## 2026-07-19 -- decoder real-session NTP pretraining: PRE-REGISTERED + BUILT
+
+The label-free door for contested/discarded sessions (user decision: build now,
+ride the next cascade alongside contested-pairs v2). Vault note:
+"2026-07-19 - Decoder Real-Session NTP Pretraining (pre-registered)".
+
+- [x] Architecture fact it rests on: the rationale goal is a separate head, not
+  a token -- real rows train action tokens only (goal None; rationale CE and
+  counterfactual sharpening skip them; leak impossible because no label exists).
+- [x] Corpus: make_decoder_corpus --real builds real_pretrain + real_holdout
+  groups -- human events as plan-shaped targets (A7 at the source, mistake
+  pairing + ALL hygiene asserts unchanged, out-of-range dropped and counted,
+  quiet records thinned 1-in-8). REAL_NTP_HOLDOUT pre-registered by id:
+  194844, 052914 (contested), 004022 (agreed), 150013 (discarded).
+- [x] Trainer: --real-pretrain mixes real rows into STAGE A only;
+  --out-prefix ships comparison arms to their own files (pin logic skipped --
+  pins govern production only). Smoke on 194844: 364 events -> 606 goal-free
+  samples, every hygiene assert passed.
+- [x] run_decoder_ntp_comparison.py: control = the production decoder the
+  cascade just trained; pretrained arm -> models/decoder_cmp_real.*; verdict =
+  real-holdout NLL STRICTLY improves AND scripted-holdout NLL within 2%.
+  Banked at capture/raw/decoder_ntp_comparison.json. Adoption is two-step:
+  user-approved recipe flip + next cascade's full OQ1 on the new recipe.
+- [x] Cascade: make step gains --real; comparison appended after
+  contested-pairs. Fixed in passing: train_decoder referenced _ROOT without
+  defining it (the 07-17 stage-pin edit -- would have crashed the next retrain).

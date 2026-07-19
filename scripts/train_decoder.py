@@ -1,6 +1,14 @@
 """Train the D4 action decoder: Stage A (next-token) then Stage B (MTP retrofit).
 
-    python scripts/train_decoder.py [--stage-a-only]
+    python scripts/train_decoder.py [--stage-a-only] [--real-pretrain]
+                                    [--out-prefix NAME]
+
+--real-pretrain (the pre-registered NTP experiment, 2026-07-19): stage A trains on
+the scripted rows PLUS the corpus's real_pretrain group — real sessions' actual
+action streams, goal-free (the rationale CE and counterfactual sharpening skip
+them). Stage B stays scripted-only. --out-prefix ships to models/<NAME>.pt/.json
+instead of the production paths (comparison arms; the stage-pin logic is skipped —
+pins govern production only).
 
 Reads capture/decoder/ (run scripts/make_decoder_corpus.py first). Ships
 models/decoder_v1.pt + decoder_v1.json, and keeps the Stage-A-only checkpoint
@@ -41,6 +49,8 @@ from mica.decoder import model as decoder_model                      # noqa: E40
 from mica.decoder import tokenizer                                   # noqa: E402
 from mica.decoder.grammar import action_from_json                    # noqa: E402
 
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 _SEED = 13
 _BATCH = 64
 _STAGE_A_EPOCHS, _STAGE_A_PATIENCE, _STAGE_A_LR = 40, 5, 3e-4
@@ -71,7 +81,10 @@ def _prepare(rows: list[dict]):
         prepared.append({
             "ids": ids,
             "evidence": np.asarray(row["evidence"], dtype=np.float32),
-            "goal_index": GOALS.index(row["goal"]),
+            # Real-session rows carry no goal (the label-free NTP experiment,
+            # 2026-07-19): -1 marks them — the rationale CE and the counterfactual
+            # sharpening both skip them, so no label can leak because none exists.
+            "goal_index": GOALS.index(row["goal"]) if row["goal"] is not None else -1,
             "slots": row["slots"],
         })
     return prepared
@@ -102,7 +115,7 @@ def _draw_slot(sample: dict, rng: random.Random):
         vector = _slot_vector(None)
     elif kind == "arm3":
         slot = sample["slots"]["arm3"]
-        if rng.random() < _CF_SHARE:
+        if rng.random() < _CF_SHARE and sample["goal_index"] >= 0:
             # counterfactual sharpening: all goal mass on the true goal, the mode
             # read kept — the exact shape intervened_belief() produces at eval time
             marginal = [0.0] * len(GOALS)
@@ -113,7 +126,7 @@ def _draw_slot(sample: dict, rng: random.Random):
             vector = _slot_vector(slot)
     else:
         vector = _slot_vector(sample["slots"]["arm1" if kind == "arm1_dense" else "arm2"])
-    return vector, SLOT_KINDS.index(kind), kind == "arm3"
+    return vector, SLOT_KINDS.index(kind), kind == "arm3" and sample["goal_index"] >= 0
 
 
 def _batches(prepared, rng: random.Random, batch_size: int, shuffle: bool):
@@ -277,6 +290,13 @@ def main() -> int:
     # decoder must never train on them, and their rows are not the early-stop signal
     holdout_raw = [row for row in holdout_raw
                    if labels[row["session"]]["group"] == "holdout"]
+    real_pretrain_raw: list[dict] = []
+    if "--real-pretrain" in sys.argv:
+        real_pretrain_raw = decoder_corpus.load_group("real_pretrain")
+        if not real_pretrain_raw:
+            print("--real-pretrain: no real_pretrain rows in the corpus — run "
+                  "make_decoder_corpus.py --real first")
+            return 1
 
     torch.manual_seed(_SEED)
     random.seed(_SEED)
@@ -285,16 +305,28 @@ def main() -> int:
     model = decoder_model.build_model(config).to(device)
     parameter_count = sum(p.numel() for p in model.parameters())
 
+    out_prefix = None
+    if "--out-prefix" in sys.argv:
+        out_prefix = sys.argv[sys.argv.index("--out-prefix") + 1]
+    weights_path = (os.path.join(_ROOT, "models", f"{out_prefix}.pt")
+                    if out_prefix else decoder_model.WEIGHTS_PATH)
+    meta_path = (os.path.join(_ROOT, "models", f"{out_prefix}.json")
+                 if out_prefix else decoder_model.META_PATH)
+    stage_a_path = (os.path.join(_ROOT, "models", f"{out_prefix}_stage_a.pt")
+                    if out_prefix else decoder_model.STAGE_A_PATH)
+
     train_rows = _prepare(train_raw)
     holdout_rows = _prepare(holdout_raw)
+    stage_a_train = train_rows + _prepare(real_pretrain_raw)
     print(f"decoder: {parameter_count/1e6:.1f}M parameters on {device.type}; "
-          f"{len(train_rows)} train / {len(holdout_rows)} holdout samples")
+          f"{len(train_rows)} train (+{len(stage_a_train) - len(train_rows)} "
+          f"real-pretrain, stage A only) / {len(holdout_rows)} holdout samples")
 
     print("Stage A — next-token warm-start")
-    stage_a = _run_stage(model, train_rows, holdout_rows, device, horizons=1,
+    stage_a = _run_stage(model, stage_a_train, holdout_rows, device, horizons=1,
                          epochs=_STAGE_A_EPOCHS, patience=_STAGE_A_PATIENCE,
                          learning_rate=_STAGE_A_LR, label="stage A")
-    torch.save(model.state_dict(), decoder_model.STAGE_A_PATH)
+    torch.save(model.state_dict(), stage_a_path)
 
     stage_b = None
     if "--stage-a-only" not in sys.argv:
@@ -313,22 +345,24 @@ def main() -> int:
     # adjudication and updating the pin, never a silent default.
     pin_path = os.path.join(_ROOT, "models", "decoder_stage_pin.json")
     ship_stage = "b" if stage_b is not None else "a"
-    if os.path.exists(pin_path):
+    if out_prefix is None and os.path.exists(pin_path):
+        # Pins govern PRODUCTION shipping only — comparison arms (--out-prefix)
+        # always ship their own final state to their own files.
         with open(pin_path, encoding="utf-8") as handle:
             pin = json.load(handle)
         if pin["ship_stage"] == "a" and stage_b is not None:
             print(f"  stage pin: shipping STAGE A per models/decoder_stage_pin.json "
                   f"({pin['by'][:60]}...) — stage B kept aside for re-adjudication")
-            model.load_state_dict(torch.load(decoder_model.STAGE_A_PATH,
-                                             map_location=device))
+            model.load_state_dict(torch.load(stage_a_path, map_location=device))
             ship_stage = "a"
         elif pin["ship_stage"] == "b" and stage_b is None:
             raise SystemExit("stage pin says ship B but --stage-a-only trained no "
                              "stage B — re-adjudicate or drop the flag")
-    torch.save(model.state_dict(), decoder_model.WEIGHTS_PATH)
-    print(f"  shipped stage {ship_stage.upper()} to decoder_v1.pt "
-          f"(pin: {'present' if os.path.exists(pin_path) else 'none — run '
-          'run_decoder_eval to adjudicate'})")
+    torch.save(model.state_dict(), weights_path)
+    print(f"  shipped stage {ship_stage.upper()} to {os.path.basename(weights_path)} "
+          + ("(comparison arm — no pin logic)" if out_prefix else
+             f"(pin: {'present' if os.path.exists(pin_path) else 'none — run '
+             'run_decoder_eval to adjudicate'})"))
     with open(os.path.join(decoder_corpus.CORPUS_DIR,
                            "decoder_corpus_report.json"), encoding="utf-8") as handle:
         corpus_report = json.load(handle)
@@ -338,6 +372,10 @@ def main() -> int:
         "parameters": parameter_count,
         "seed": _SEED,
         "batch_size": _BATCH,
+        "real_pretrain": {"rows": len(real_pretrain_raw),
+                          "stage": "A only, goal-free (pre-registered 2026-07-19)"}
+                         if real_pretrain_raw else None,
+        "out_prefix": out_prefix,
         "loss_knobs": {"lambda_h": _LAMBDA_H, "lambda_c": _LAMBDA_C,
                        "lambda_rationale": _LAMBDA_RATIONALE,
                        "counterfactual_share": _CF_SHARE,
@@ -347,9 +385,10 @@ def main() -> int:
         "stage_a": stage_a,
         "stage_b": stage_b,
         "corpus": corpus_report,
-    })
-    print(f"shipped models/decoder_v1.pt + .json (stage A kept at "
-          f"{os.path.basename(decoder_model.STAGE_A_PATH)} for the OQ1 check)")
+    }, path=meta_path)
+    print(f"shipped {os.path.basename(weights_path)} + "
+          f"{os.path.basename(meta_path)} (stage A kept at "
+          f"{os.path.basename(stage_a_path)} for the OQ1 check)")
     return 0
 
 

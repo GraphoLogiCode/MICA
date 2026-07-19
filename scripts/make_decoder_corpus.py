@@ -100,6 +100,84 @@ def _banked_holdout_ids() -> list[str]:
     return sorted(s for s in meta["data"]["held_out_sessions"] if not s.startswith("fabric-"))
 
 
+# --- the pre-registered real-session NTP groups (2026-07-19, vault note) --------
+
+# Eval-only real holdout, pre-registered BY ID before any run — never pretrained on.
+REAL_NTP_HOLDOUT = ("fabric-20260718-194844", "fabric-20260719-052914",
+                    "fabric-20260713-004022", "fabric-20260714-150013")
+# The heads experiments' reserved clean sessions: excluded from pretraining so the
+# decoder never sees the sessions any heads claim is judged on.
+_HEADS_EVAL_REAL = ("fabric-20260705-134615", "fabric-20260712-030849",
+                    "fabric-20260712-025354", "fabric-20260705-002717")
+# Real records vastly outnumber their events, and the helper-trace target only
+# changes when a placement's tick is crossed — so quiet records mostly duplicate
+# targets. Keep every event-bearing record + one quiet record in QUIET_STRIDE.
+REAL_QUIET_STRIDE = 8
+
+
+def _real_excluded() -> set[str]:
+    excluded = set(REAL_NTP_HOLDOUT) | set(_HEADS_EVAL_REAL)
+    with open(os.path.join(_ROOT, "models", "heads_v1.json"), encoding="utf-8") as handle:
+        meta = json.load(handle)["data"]
+    for key in ("held_out_sessions", "validation_sessions"):
+        excluded.update(s for s in meta.get(key, ()) if s.startswith("fabric-"))
+    return excluded - set(REAL_NTP_HOLDOUT)   # the holdout still gets WRITTEN (eval-only)
+
+
+def _write_real_groups(write_session) -> dict:
+    """The label-free real groups: targets are what the human ACTUALLY did next.
+    Contested and discarded sessions enter with goal None — no label anywhere in
+    the sample (the rationale head and the counterfactual sharpening skip them)."""
+    from mica.capture import session_store
+    from mica.capture.jsonl_ingest import JsonlSource
+    from mica.decoder import context as context_builder
+
+    with open(os.path.join(session_store.RAW_ROOT, "labels.json"),
+              encoding="utf-8") as handle:
+        real_ids = sorted(sid for sid in json.load(handle) if sid.startswith("fabric-"))
+    excluded = _real_excluded()
+    report = {"pretrain": 0, "holdout": 0, "excluded": sorted(excluded),
+              "agent_events_dropped": 0, "out_of_range_dropped": 0,
+              "skipped_no_evidence": [], "quiet_stride": REAL_QUIET_STRIDE}
+    print("real-session NTP groups (pre-registered 2026-07-19; goal-free targets) ...")
+    for session_id in real_ids:
+        if session_id in excluded:
+            continue
+        b1_path = session_store.session_file(session_id, ".evidence2d.jsonl")
+        b2_path = session_store.session_file(session_id, ".evidence3d.jsonl")
+        if not (os.path.exists(b1_path) and os.path.exists(b2_path)):
+            report["skipped_no_evidence"].append(session_id)
+            continue
+        session = JsonlSource(session_store.session_jsonl(session_id),
+                              session_store.session_file(session_id, ".manifest.json")).load()
+        placements, agent_dropped = decoder_corpus.real_session_placements(session)
+        report["agent_events_dropped"] += agent_dropped
+        b1 = [json.loads(line) for line in open(b1_path, encoding="utf-8") if line.strip()]
+        b2 = [json.loads(line) for line in open(b2_path, encoding="utf-8") if line.strip()]
+        fused = fuse_streams(b1, b2, session_id)
+        origin = context_builder.build_origin(fused)
+        if origin is None or not placements:
+            report["skipped_no_evidence"].append(session_id)
+            continue
+        placements, far_dropped = decoder_corpus.in_range_placements(placements, origin)
+        report["out_of_range_dropped"] += far_dropped
+        # Thin the quiet records (duplicate targets); keep every event-bearing one.
+        quiet_seen = 0
+        kept = []
+        for record in fused:
+            if record.event_ids:
+                kept.append(record)
+            else:
+                quiet_seen += 1
+                if quiet_seen % REAL_QUIET_STRIDE == 0:
+                    kept.append(record)
+        group = ("real_holdout" if session_id in REAL_NTP_HOLDOUT else "real_pretrain")
+        write_session(session_id, dict(decoder_corpus.REAL_LABEL), kept,
+                      placements, group, covered=False)
+        report[{"real_holdout": "holdout", "real_pretrain": "pretrain"}[group]] += 1
+    return report
+
+
 def main() -> int:
     pin = provenance_pin(_OUT)
     if pin is not None and "--unpin" not in sys.argv:
@@ -197,6 +275,10 @@ def main() -> int:
         write_session(session_id, label, fused, placements, "banked_holdout",
                       session_id in coverage_banked)
 
+    real_report = None
+    if "--real" in sys.argv:
+        real_report = _write_real_groups(write_session)
+
     with open(os.path.join(_OUT, "decoder_labels.json"), "w", encoding="utf-8") as handle:
         json.dump(labels, handle, indent=2)
 
@@ -218,6 +300,7 @@ def main() -> int:
             "unusable_replies": arm2_reader.unusable} if arm2_reader else arm2_note),
         "hygiene": "asserted per sample (join verified; place targets never standing; "
                    "break targets always standing); a violation refuses the run",
+        "real_groups": real_report,   # the pre-registered NTP experiment (2026-07-19)
     }
     report_path = os.path.join(_OUT, "decoder_corpus_report.json")
     with open(report_path, "w", encoding="utf-8") as handle:

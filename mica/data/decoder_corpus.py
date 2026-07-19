@@ -222,6 +222,53 @@ def _action_to_json(action: Action) -> dict:
     return action_to_json(action)
 
 
+def real_session_placements(session) -> tuple[tuple[ScriptedPlacement, ...], int]:
+    """A REAL session's human block events in the plan-shaped stream the target
+    builder eats — (placements, agent_events_dropped).
+
+    This is the label-free door (pre-registered 2026-07-19): the targets are what
+    the human ACTUALLY did next, so contested and discarded sessions train the
+    token stream with no goal label anywhere. The A7 rule applies at the source —
+    agent-placed blocks are dropped and counted, exactly as they are excluded
+    from evidence everywhere else. Downstream, mistake-pairing and every corpus
+    hygiene assert run unchanged: a human's own break-corrects-place pattern is
+    the same shape as a scripted plan's."""
+    from ..contracts.b0 import is_agent_actor
+
+    placements = []
+    dropped = 0
+    for packet in session.packets:
+        for event in packet.server.block_events:
+            if is_agent_actor(event.actor):
+                dropped += 1
+                continue
+            placements.append(ScriptedPlacement(
+                tick=packet.tick, pos=event.pos, block_type=event.block_type,
+                op=event.op, actor=event.actor))
+    return tuple(placements), dropped
+
+
+def in_range_placements(placements: tuple[ScriptedPlacement, ...],
+                        origin: tuple[int, int, int]
+                        ) -> tuple[tuple[ScriptedPlacement, ...], int]:
+    """Drop events outside the grammar's +/-COORD_RANGE of the origin — free
+    builds occasionally wander; a scripted plan never does. Dropping (and
+    counting) keeps the hygiene asserts as asserts instead of session-killers."""
+    kept, dropped = [], 0
+    for op in placements:
+        offset = (op.pos.x - origin[0], op.pos.y - origin[1], op.pos.z - origin[2])
+        if any(abs(v) > COORD_RANGE for v in offset):
+            dropped += 1
+            continue
+        kept.append(op)
+    return tuple(kept), dropped
+
+
+REAL_LABEL = {"goal": None, "subtype": None, "mode": None}
+# Real rows carry goal None: the rationale head never trains on them and the
+# counterfactual sharpening never draws them — no label exists to leak.
+
+
 def regenerate_placements(label: dict) -> tuple[ScriptedPlacement, ...]:
     """A banked session's placements, rebuilt from its label — verified by count."""
     build, rebuilt_label = build_from_plan(plan_from_label(label))
@@ -242,7 +289,26 @@ def load_rows(directory: str = CORPUS_DIR) -> tuple[list[dict], list[dict], dict
         labels = json.load(handle)
     train, evaluation = [], []
     for session_id, label in sorted(labels.items()):
+        if label["group"] in ("real_pretrain", "real_holdout"):
+            # The pre-registered NTP experiment's rows (2026-07-19): loaded
+            # explicitly via load_group by the flag that asked for them — never
+            # folded into the standard scripted train/eval split.
+            continue
         path = os.path.join(directory, f"{session_id}.decoder.jsonl")
         rows = [json.loads(line) for line in open(path, encoding="utf-8") if line.strip()]
         (train if label["group"] == "train" else evaluation).extend(rows)
     return train, evaluation, labels
+
+
+def load_group(group: str, directory: str = CORPUS_DIR) -> list[dict]:
+    """Every row of one named session group (e.g. real_pretrain, real_holdout)."""
+    with open(os.path.join(directory, "decoder_labels.json"), encoding="utf-8") as handle:
+        labels = json.load(handle)
+    rows: list[dict] = []
+    for session_id, label in sorted(labels.items()):
+        if label["group"] != group:
+            continue
+        path = os.path.join(directory, f"{session_id}.decoder.jsonl")
+        rows.extend(json.loads(line)
+                    for line in open(path, encoding="utf-8") if line.strip())
+    return rows

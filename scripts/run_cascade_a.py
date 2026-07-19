@@ -41,7 +41,8 @@ _CHAIN = [
     ("calibration_report.py", ["--real", "--heads", "v1", "--held-out"]),
     ("train_arm1.py", []),                       # implicit-classifier arm
     ("run_arms.py", []),                          # four-arm comparison (fresh arm2 queries)
-    ("make_decoder_corpus.py", ["--unpin"]),    # decoder corpus (pin removed)
+    ("make_decoder_corpus.py", ["--unpin", "--real"]),  # decoder corpus + the
+                                                 # real NTP groups (pre-reg 07-19)
     ("train_decoder.py", []),                    # Stage A NTP -> Stage B MTP
     ("run_decoder_eval.py", []),                 # OQ1 + gate freeze
     ("run_gate.py", []),                          # counterfactual gate + traces
@@ -52,6 +53,11 @@ _CHAIN = [
     # touches production models -- a "win" is a separate dated D3 amendment for
     # the user to approve.
     ("run_contested_comparison.py", ["--no-vlm"]),
+    # The real-session NTP comparison (pre-registered 2026-07-19): one extra
+    # decoder training (stage A += goal-free real rows) against the production
+    # decoder just trained above; verdict printed and banked. Adoption stays a
+    # two-step user decision -- nothing ships from here.
+    ("run_decoder_ntp_comparison.py", []),
 ]
 
 _PRE_MODELS = ["heads_v1.npz", "heads_v1.json", "arm1.npz", "arm1.json",

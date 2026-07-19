@@ -121,7 +121,9 @@ def checklist_from(labels: dict, matcher_rows: dict, states: dict[str, str],
                              "label": f"{label.get('goal')}/{label.get('subtype')}",
                              "pairs": row.get("pairs", 0)})
         elif label.get("kept"):
-            excluded.append({"sid": sid, "reason": "matcher CONTESTS your label — pairs withheld"})
+            excluded.append({"sid": sid, "reason": "matcher CONTESTS your label — pairs "
+                             "withheld from production; feeds the cascade's v2 "
+                             "comparison arm (builder's label as truth)"})
         else:
             excluded.append({"sid": sid,
                              "reason": f"discarded: {label.get('reason', 'below threshold')}"})

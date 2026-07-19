@@ -86,6 +86,11 @@ let runLiveSession = null;     // the session id parsed from its output
 let agent = null;              // the body: one per LAN world
 let agentCooldownUntil = 0;
 let shuttingDown = false;
+// R-2 (2026-07-18): one GPU. The chain's run_d1/run_d2 model loads and run_live's
+// pre-warm crashed each other 9 s apart; whichever spawn loses the race dies with
+// its traceback. When run_live must wait for the chain, this remembers to spawn
+// it the moment the chain drains.
+let rearmPending = false;
 
 // ------------------------------------------------------------------ the log
 
@@ -189,6 +194,33 @@ function minecraftAlive(callback) {
 
 function spawnRunLive() {
   if (shuttingDown || runLive !== null) return;   // one mind at a time
+  // R-2: the GPU is shared with the post-session chain, and concurrent model
+  // loads kill each other. Priority rule: a LIVE game always gets the mind (a
+  // late chain is retryable, a missed session is not), so run_live only yields
+  // when the chain is actually running/queued — or when a chain is pending
+  // (manifest recheck) with Minecraft closed, meaning no session can need it.
+  if (chainBusy()) {
+    rearmPending = true;
+    log('runlive_deferred', { detail: 'post-session chain holds the GPU; run_live spawns when it drains' });
+    return;
+  }
+  if (deferring.size > 0) {
+    minecraftAlive((alive) => {
+      if (shuttingDown || runLive !== null) return;
+      if (!alive || chainBusy()) {     // re-check: the chain may have queued meanwhile
+        rearmPending = true;
+        log('runlive_deferred', { detail: 'chain imminent and no game running — GPU stays free for it' });
+        return;
+      }
+      spawnRunLiveNow();               // player still in the game: the mind wins
+    });
+    return;
+  }
+  spawnRunLiveNow();
+}
+
+function spawnRunLiveNow() {
+  rearmPending = false;          // this spawn satisfies any deferred rearm
   // The full demo config: both GPU model channels pre-warmed, plus the trained v1
   // belief heads (D5 §9: the demo runs on the heads its thresholds were frozen
   // against). Your own environment still wins — the defaults sit BEFORE the
@@ -320,10 +352,33 @@ function runChain(sid) {
   drainChain();
 }
 
+function chainBusy() {
+  return chainRunning || chainQueue.length > 0;
+}
+
 function drainChain() {
-  if (chainRunning || chainQueue.length === 0) return;
+  if (chainRunning) return;
+  if (chainQueue.length === 0) {
+    // R-2: the chain has the GPU no longer — spawn the mind it made wait.
+    if (rearmPending && !shuttingDown && runLive === null) {
+      rearmPending = false;
+      fireRearm();
+    }
+    return;
+  }
   chainRunning = true;
   runStep(chainQueue.shift(), 0, () => { chainRunning = false; drainChain(); });
+}
+
+function fireRearm() {
+  // Same policy as the runlive_exit handler: eager pre-warm spawns regardless;
+  // lazy only re-arms while Minecraft is still up (the GPU stays free otherwise).
+  if (PREWARM === 'eager') return spawnRunLive();
+  minecraftAlive((alive) => {
+    if (shuttingDown) return;
+    if (alive) spawnRunLive();
+    else log('minecraft_closed', { detail: 'GPU released; watching for the next launch' });
+  });
 }
 
 function runStep(sid, index, done) {

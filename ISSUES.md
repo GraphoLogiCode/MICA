@@ -2453,9 +2453,13 @@ unrecoverable: child stdout/stderr goes to the watcher console only.
   quarantined; any other non-zero exit is a retryable chain failure that writes
   no report (same honesty rule as the run_d1 branch). Helper
   _fresh_replay_quarantine + tests/test_after_game_quarantine_verdict.py.
-- [ ] **R-2 MAJOR -- GPU contention**: the eager rearm restarts run_live 10 s after
-  exit, racing the chain's run_d1/run_d2 GPU work (lan_autostart.js:199-204 vs
-  297-322). Defer the rearm until the chain finishes (or run chain steps first).
+- [x] **R-2 FIXED (2026-07-18 night) -- GPU serialized, live play wins**: run_live
+  yields the GPU only when a chain is running/queued, or when a chain is pending
+  (manifest recheck) with Minecraft closed; if the game is up, the mind always
+  spawns (a late chain is retryable, a missed session is not). A deferred spawn
+  fires the moment the chain drains (rearmPending -> fireRearm, PREWARM-aware).
+  Walked against tonight's timeline: the 00:03:33 rearm now defers (game closed,
+  chain 9 s out) and the 23:51 mid-session crash still re-arms immediately.
 - [x] **R-3 FIXED (2026-07-18 night) -- child output persisted**: tagPipe now also
   appends every line (incl. a torn traceback tail, flushed on child close) to
   capture/raw/child_logs/ -- runlive-<ts>.log, agent-<ts>.log,

@@ -35,15 +35,20 @@ _RAW = session_store.RAW_ROOT
 # (script, args) in order. Each is idempotent and reproducible on its own.
 _CHAIN = [
     ("make_scripted_corpus.py", ["--unpin"]),   # motion corpus (pin removed)
-    ("label_finished_builds.py", []),           # relabel -> source_b pairs
-    ("train_heads.py", []),                      # adapter + likelihood heads v1
+    # Contested pairs JOIN production training (D3 amendment 2026-07-19, the
+    # v2 comparison win): the relabel writes them, train_heads consumes them.
+    ("label_finished_builds.py", ["--contested-pairs"]),
+    ("train_heads.py", ["--include-contested-pairs"]),
     ("run_tracker.py", ["--real", "--heads", "v1"]),        # belief on real, new heads
     ("calibration_report.py", ["--real", "--heads", "v1", "--held-out"]),
     ("train_arm1.py", []),                       # implicit-classifier arm
     ("run_arms.py", []),                          # four-arm comparison (fresh arm2 queries)
     ("make_decoder_corpus.py", ["--unpin", "--real"]),  # decoder corpus + the
                                                  # real NTP groups (pre-reg 07-19)
-    ("train_decoder.py", []),                    # Stage A NTP -> Stage B MTP
+    # Real-session NTP pretraining adopted (2026-07-19 note, decisive win):
+    # stage A trains on scripted + goal-free real rows; OQ1 adjudicates the new
+    # recipe two steps below in this same chain before any live session exists.
+    ("train_decoder.py", ["--real-pretrain"]),
     ("run_decoder_eval.py", []),                 # OQ1 + gate freeze
     ("run_gate.py", []),                          # counterfactual gate + traces
     # The contested-pairs comparison rides every cascade (rule v2, re-registered

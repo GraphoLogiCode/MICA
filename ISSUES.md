@@ -2680,10 +2680,12 @@ STABLE at 0.338/0.438 (a good sign for the freeze's robustness).
   (-37%) and scripted holdout ALSO improved (1.7683->1.7246). The domain gap
   was 1.25 nats -- real streams were the missing distribution, not noise.
   Banked in the 07-19 note.
-- [ ] **DECISION (user): D3 amendment** -- include contested pairs (builder's
-  label as truth) in production heads training?
-- [ ] **DECISION (user): decoder recipe flip** -- adopt --real-pretrain into the
-  cascade's production decoder training? If yes: next cascade's full OQ1 must
-  pass on the new recipe before it ships live (two-step, per registration).
+- [x] **DECIDED (user, 2026-07-19): BOTH ADOPTED.** D3 amended -- contested
+  pairs join production heads training (builder's label as truth; cascade runs
+  --contested-pairs / --include-contested-pairs). Decoder recipe flipped to
+  --real-pretrain in the cascade; the same chain's OQ1 adjudicates the new
+  recipe before any live session exists. Both effective at the NEXT cascade;
+  tonight's shipped models remain the old-recipe ones. The comparison harnesses
+  stay in the chain as standing monitors of both adopted rules.
 - Watcher restarted post-cascade with MICA_CONSENT in its environment -- the
   next session is the first with consent actually armed.

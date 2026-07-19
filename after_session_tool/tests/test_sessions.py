@@ -112,10 +112,10 @@ def test_checklist_sorts_included_from_excluded():
     assert got["included"] == [{"sid": "fabric-in", "label": "defense/wall", "pairs": 42}]
     reasons = {e["sid"]: e["reason"] for e in got["excluded"]}
     assert "CONTESTS" in reasons["fabric-contested"]
-    # contested sessions are not purely excluded since the 2026-07-19 v2
-    # re-registration: they feed the cascade's comparison arm, and the
-    # checklist must say so or it misstates what the next cascade consumes
-    assert "comparison arm" in reasons["fabric-contested"]
+    # contested pairs JOIN production training since the 2026-07-19 D3
+    # amendment (the v2 comparison win) -- the checklist must say the
+    # builder's word wins, not that the pairs are withheld
+    assert "word wins" in reasons["fabric-contested"]
     assert "below threshold" in reasons["fabric-discarded"]
     assert "no label yet" in reasons["fabric-unlabeled"]
     assert "quarantined" in reasons["fabric-quar"]

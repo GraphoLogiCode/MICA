@@ -248,7 +248,8 @@ def _consent_gate(tmp_path, monkeypatch, consent_place, consent):
 def test_consent_route_places_the_agreed_block_once(tmp_path, monkeypatch):
     if not gate_ready():
         pytest.skip("no decoder/gate freeze on this machine")
-    consent = {"ts": int(time.time() * 1000), "cell": [1, 64, 1]}
+    consent = {"ts": int(time.time() * 1000), "cell": [1, 64, 1],
+               "block": "oak_planks"}
     gate = _consent_gate(tmp_path, monkeypatch, consent_place=True, consent=consent)
     try:
         belief = _peaked_belief()             # conf BELOW theta_place on purpose:
@@ -271,10 +272,30 @@ def test_consent_route_places_the_agreed_block_once(tmp_path, monkeypatch):
         gate.close()
 
 
+def test_consent_honors_the_offer_even_after_the_proposal_moves(tmp_path, monkeypatch):
+    # The decoder re-proposes every read: the fixture's proposal targets (1,64,1),
+    # but the human consented to an OFFER at (5,64,5) voiced moments earlier.
+    # The yes licenses the offer, not whatever the decoder wants now (the first
+    # cut required a match and a valid yes died on "different cell").
+    if not gate_ready():
+        pytest.skip("no decoder/gate freeze on this machine")
+    consent = {"ts": int(time.time() * 1000), "cell": [5, 64, 5],
+               "block": "oak_planks"}
+    gate = _consent_gate(tmp_path, monkeypatch, consent_place=True, consent=consent)
+    try:
+        block = gate.read(_peaked_belief(), fused_record(), _safe_status())
+        assert block["place"] is not None
+        assert block["place"]["cell"] == [5, 64, 5]      # the consented cell
+        assert block["place"]["route"] == "consent"
+    finally:
+        gate.close()
+
+
 def test_consent_is_ignored_without_the_flag(tmp_path, monkeypatch):
     if not gate_ready():
         pytest.skip("no decoder/gate freeze on this machine")
-    consent = {"ts": int(time.time() * 1000), "cell": [1, 64, 1]}
+    consent = {"ts": int(time.time() * 1000), "cell": [1, 64, 1],
+               "block": "oak_planks"}
     gate = _consent_gate(tmp_path, monkeypatch, consent_place=False, consent=consent)
     try:
         block = gate.read(_peaked_belief(), fused_record(), _safe_status())
@@ -292,21 +313,21 @@ def test_consent_veto_rules():
     from mica.gate.live_loop import CONSENT_FRESH_MS, consent_veto
 
     now = 1_000_000.0
-    ok = {"ts": now * 1000 - 100, "cell": [1, 64, 1]}
-    mats = {"feasible_prefix": 3, "missing": {}}
+    ok = {"ts": now * 1000 - 100, "cell": [1, 64, 1], "block": "oak_planks"}
+    stock = {"oak_planks": 8}
     pos = (30.0, 64.0, 30.0)
-    assert consent_veto(ok, set(), (1, 64, 1), pos, mats, now) is None
-    assert "already honored" in consent_veto(ok, {ok["ts"]}, (1, 64, 1), pos, mats, now)
-    stale = {"ts": now * 1000 - CONSENT_FRESH_MS - 1, "cell": [1, 64, 1]}
-    assert "expired" in consent_veto(stale, set(), (1, 64, 1), pos, mats, now)
-    assert "different cell" in consent_veto(ok, set(), (2, 64, 1), pos, mats, now)
-    assert "cannot see" in consent_veto(ok, set(), (1, 64, 1), None, mats, now)
+    assert consent_veto(ok, set(), set(), pos, stock, now) is None
+    assert "already honored" in consent_veto(ok, {ok["ts"]}, set(), pos, stock, now)
+    stale = {"ts": now * 1000 - CONSENT_FRESH_MS - 1, "cell": [1, 64, 1],
+             "block": "oak_planks"}
+    assert "expired" in consent_veto(stale, set(), set(), pos, stock, now)
+    assert "already filled" in consent_veto(ok, set(), {(1, 64, 1)}, pos, stock, now)
+    assert "cannot see" in consent_veto(ok, set(), set(), None, stock, now)
     inside = (1.5, 64.5, 1.5)                 # standing exactly in the target cell
-    assert "personal space" in consent_veto(ok, set(), (1, 64, 1), inside, mats, now)
-    broke = {"feasible_prefix": 0, "missing": {"oak_planks": 1}}
-    assert "no stock" in consent_veto(ok, set(), (1, 64, 1), pos, broke, now)
-    assert "malformed" in consent_veto({"cell": [1, 64, 1]}, set(), (1, 64, 1),
-                                       pos, mats, now)
+    assert "personal space" in consent_veto(ok, set(), set(), inside, stock, now)
+    assert "no oak_planks in stock" in consent_veto(ok, set(), set(), pos, {}, now)
+    assert "malformed" in consent_veto({"cell": [1, 64, 1]}, set(), set(),
+                                       pos, stock, now)          # no ts, no block
 
 
 def test_agent_events_feed_the_repropose_guard(runner):

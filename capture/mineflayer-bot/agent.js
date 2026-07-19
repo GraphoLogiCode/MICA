@@ -277,6 +277,7 @@ function start(port) {
   // down is a temporal-dead-zone crash on launch (it happened, 2026-07-19).
   const CONSENT_WINDOW_MS = 60000;
   let lastVoicedCell = null;
+  let lastVoicedBlock = null;   // the OFFER is {cell, block}; the yes names both
   let lastVoicedMs = 0;
   let pendingConsent = null;
   let agentState = 'connecting';
@@ -479,22 +480,24 @@ function start(port) {
     // items (pickup is automatic on contact) and stand still for an approaching
     // human. The workspace rule above still wins, and the posture ends the
     // moment the shortage clears (the thank-you in liveTick clears it).
-    if (neededBlocks.size) {
-      const drop = nearestDroppedItem(me);
-      if (drop) {
-        if (now - lastBackoffMs > 750) {
-          setGoal(new goals.GoalNear(drop.position.x, drop.position.y,
-                                     drop.position.z, 1));
-          lastBackoffMs = now;
-        }
-        followMode = 'collecting';
-        return;
+    // Hand-overs (2026-07-19, user direction): ANY item dropped nearby is an
+    // invitation — walk to it and let contact pickup take it, shortage or not.
+    // The workspace rule still wins: a drop inside the human's working area is
+    // theirs, not a toss. Needed-block receipts keep their thank-you in liveTick.
+    const drop = nearestDroppedItem(me);
+    if (drop && !(focus && drop.position.distanceTo(focus) < WORKSPACE_R)) {
+      if (now - lastBackoffMs > 750) {
+        setGoal(new goals.GoalNear(drop.position.x, drop.position.y,
+                                   drop.position.z, 1));
+        lastBackoffMs = now;
       }
-      if (d < FOLLOW_NEAR + 4) {
-        setGoal(null);
-        followMode = 'receiving';
-        return;
-      }
+      followMode = 'collecting';
+      return;
+    }
+    if (neededBlocks.size && d < FOLLOW_NEAR + 4) {
+      setGoal(null);
+      followMode = 'receiving';
+      return;
     }
     // The D5 gate's YIELD widens the personal band for a few seconds: the agent
     // steps further out the moment the gate says the human is too close to its
@@ -626,6 +629,7 @@ function start(port) {
       lastGateChatMs = now;
       lastVoicedSummary = gate.proposal_summary || null;
       lastVoicedCell = gate.target_cell || null;   // what a "yes" would refer to
+      lastVoicedBlock = gate.target_block || null;
       lastVoicedMs = now;
       followMath.noteEngaged(followState, now);   // step in: it just spoke to them
       if (gate.state === 'suggest') {
@@ -892,12 +896,15 @@ function start(port) {
     }
     // Placement consent (D5 §10): a "yes" while a voiced suggestion is fresh —
     // and no materials ask is waiting (the ask's yes wins below, as always).
-    if (!pendingAsk && lastVoicedCell
+    if (!pendingAsk && lastVoicedCell && lastVoicedBlock
         && Date.now() - lastVoicedMs <= CONSENT_WINDOW_MS
         && /\b(yes|yeah|okay|ok|sure|go ahead|do it|place it)\b/.test(said)
         && !/\b(no|not|don'?t|dont|never)\b/.test(said)) {
-      pendingConsent = { ts: Date.now(), cell: lastVoicedCell };
+      // The consent names the full OFFER — the mind honors exactly this pair
+      // even if its own proposal has wandered since the voicing.
+      pendingConsent = { ts: Date.now(), cell: lastVoicedCell, block: lastVoicedBlock };
       lastVoicedCell = null;               // one yes per voicing
+      lastVoicedBlock = null;
       bot.chat("Thank you — I'll place that one block. Say stop to change your mind.");
       lastAction = 'consent recorded';
       writeStatus();
@@ -1146,7 +1153,10 @@ function start(port) {
         if (!free) return startViewer(candidates.slice(1));
         try {
           require('prismarine-viewer').mineflayer(bot, {
-            port, firstPerson: true, viewDistance: 4,
+            // viewDistance 4 rendered only ~64 blocks — the camera visibly cut
+            // off mid-build ("cut off in certain region", 2026-07-19). 8 chunks
+            // covers any capture region at browser-mesh cost we can afford.
+            port, firstPerson: true, viewDistance: 8,
           });
           viewerPort = port;      // the port that really bound, not the wished-for one
           viewerError = null;

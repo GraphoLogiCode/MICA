@@ -49,30 +49,39 @@ CONSENT_FRESH_MS = 60000       # a "yes" licenses the proposal for this long
 CONSENT_ENTOMB_R = 1.5         # never place within this of the human's body
 
 
-def consent_veto(consent, consumed, target, player_pos, materials_block,
+def consent_veto(consent, consumed, agent_cells, player_pos, inventory,
                  now_s: float) -> str | None:
     """Why a relayed consent may NOT become a directive right now — or None when
     it may. The checks are the D5 §10 consent rules, in refusal-first order:
     every returned string lands in the trace row, so a session's unhonored
-    yeses are diagnosable afterward."""
-    if not isinstance(consent, dict) or consent.get("ts") is None:
-        return "consent malformed"
+    yeses are diagnosable afterward.
+
+    The consent names its own OFFER — the {cell, block} the body voiced — and
+    that offer is what gets honored (adjusted 2026-07-19, same day: the first
+    cut required the CURRENT proposal to still target the consented cell, but
+    the decoder re-proposes every read and can wander in the seconds between
+    the offer and the yes; a valid yes then died on "different cell"). The
+    current proposal plays no part here."""
+    if (not isinstance(consent, dict) or consent.get("ts") is None
+            or consent.get("cell") is None or not consent.get("block")):
+        return "consent malformed (needs ts + cell + block)"
     if consent["ts"] in consumed:
         return "consent already honored (one block per yes)"
     if now_s * 1000 - consent["ts"] > CONSENT_FRESH_MS:
-        return "consent expired (the proposal may have moved on)"
-    if target is None or consent.get("cell") is None \
-            or tuple(consent["cell"]) != tuple(target):
-        return "consent names a different cell than the current proposal"
+        return "consent expired"
+    cell = tuple(consent["cell"])
+    if cell in agent_cells:
+        return "the consented cell is already filled by the agent"
     if player_pos is None:
         return "human position unknown — not placing near a person I cannot see"
-    dx = target[0] + 0.5 - player_pos[0]
-    dy = target[1] + 0.5 - player_pos[1]
-    dz = target[2] + 0.5 - player_pos[2]
+    dx = cell[0] + 0.5 - player_pos[0]
+    dy = cell[1] + 0.5 - player_pos[1]
+    dz = cell[2] + 0.5 - player_pos[2]
     if (dx * dx + dy * dy + dz * dz) ** 0.5 <= CONSENT_ENTOMB_R:
         return "target is inside the human's personal space"
-    if materials_block is not None and materials_block.get("feasible_prefix", 1) < 1:
-        return "no stock for the proposed block (the ask flow handles this)"
+    block = materials.normalize(consent["block"])
+    if inventory is not None and inventory.get(block, 0) < 1:
+        return f"no {block} in stock (toss one over and say yes again)"
     return None
 
 
@@ -133,6 +142,7 @@ class LiveGateRunner:
         self.consent_place = consent_place
         self._consent_consumed: set = set()       # each consent ts licenses once
         self._agent_consent: dict | None = None   # the newest relayed consent
+        self._agent_inventory: dict | None = None  # the same snapshot's inventory
         self.session_id = session_id              # keys the declared-target lookup
         self.params = params                      # MUST match the live belief's knobs
         self.hysteresis = commit.CommitHysteresis()
@@ -271,10 +281,12 @@ class LiveGateRunner:
                 # the first placement the agent has no stock for — a shortage
                 # SHRINKS the build; substitution needs an explicit chat grant.
                 if agent_snapshot is not None:
-                    # Consent rides the same snapshot (one file read per gate read).
+                    # Consent + inventory ride the same snapshot (one file read
+                    # per gate read); the consent branch in read() needs both.
                     self._agent_consent = (agent_snapshot[3]
                                            if len(agent_snapshot) > 3 else None)
                     inventory, grants = agent_snapshot[0], agent_snapshot[1]
+                    self._agent_inventory = inventory
                     mat_flags, missing, substituted = materials.feasibility_flags(
                         proposal.actions, inventory, grants)
                     feasible_prefix = (mat_flags.index(True) if any(mat_flags)
@@ -362,6 +374,10 @@ class LiveGateRunner:
             self._materialized(belief, status), fused, status)
         decision, candidate = self.fsm.read(gate_read)
         summary = proposal_summary(proposal, target, held_k, gate_read.top_goal)
+        first_block = (materials.normalize(proposal.actions[0].block)
+                       if (proposal is not None and target is not None
+                           and isinstance(proposal.actions[0], Place))
+                       else None)
         # The placement directive (§9 amendment 2026-07-12): at most ONE block per
         # read — the first committed action, only when it is a Place, only at a cell
         # the agent has not already filled. The body executes; this only authorizes.
@@ -388,28 +404,29 @@ class LiveGateRunner:
                                          "block": block_name},
                               "actor": "agent", "reversible": True, "route": route}]
         # The consent route (D5 §10, 2026-07-19): the human's relayed "yes" licenses
-        # ONE placement of the current proposal, whatever the confidence — the
-        # license is their word, not the model's calibration. YIELD still emits
-        # nothing, a consumed consent never fires twice, and the veto's reason is
-        # written into the row so an unhonored yes is diagnosable afterward.
+        # ONE placement of the OFFER they consented to — {cell, block} as voiced —
+        # whatever the confidence and whatever the decoder proposes NOW (it
+        # re-proposes every read and may have wandered since the offer). YIELD
+        # still emits nothing, a consumed consent never fires twice, and the
+        # veto's reason is written into the row so an unhonored yes is
+        # diagnosable afterward.
         if (directive is None and self.consent_place
                 and self._agent_consent is not None
-                and decision.state.value != "yield"
-                and proposal is not None and target is not None
-                and isinstance(proposal.actions[0], Place)
-                and tuple(target) not in self.agent_cells):
-            veto = consent_veto(self._agent_consent, self._consent_consumed, target,
-                                gate_read.player_pos, self._materials_block,
-                                time.time())
+                and decision.state.value != "yield"):
+            veto = consent_veto(self._agent_consent, self._consent_consumed,
+                                self.agent_cells, gate_read.player_pos,
+                                self._agent_inventory, time.time())
             if veto is None:
+                consented_cell = tuple(self._agent_consent["cell"])
+                block_name = materials.normalize(self._agent_consent["block"])
                 self._consent_consumed.add(self._agent_consent["ts"])
-                block_name = materials.normalize(proposal.actions[0].block)
-                self.agent_cells.add(tuple(target))
+                self.agent_cells.add(consented_cell)
                 self.directives += 1
                 directive = {"id": f"{self._run_token}-{self.reads}",
-                             "cell": list(target),
+                             "cell": list(consented_cell),
                              "block": block_name, "route": "consent"}
-                committed = [{"action": {"type": "place", "cell": list(target),
+                committed = [{"action": {"type": "place",
+                                         "cell": list(consented_cell),
                                          "block": block_name},
                               "actor": "agent", "reversible": True,
                               "route": "consent"}]
@@ -439,11 +456,8 @@ class LiveGateRunner:
                # CONTROL group computable (D9 §3): reads where a proposal existed
                # but was never surfaced give the base rate at which the human does
                # the proposed thing anyway. Schema-additive.
-               "proposal_first": ({"block": materials.normalize(proposal.actions[0].block),
-                                   "cell": list(target)}
-                                  if (proposal is not None and target is not None
-                                      and isinstance(proposal.actions[0], Place))
-                                  else None),
+               "proposal_first": ({"block": first_block, "cell": list(target)}
+                                  if first_block is not None else None),
                # The auditor judges each trace by its own recorded authority: demo
                # traces must show zero placements, place traces at most 1 per read.
                "authority": self._authority(),
@@ -460,6 +474,10 @@ class LiveGateRunner:
                 # asking for materials the config would never let it place is noise.
                 "authority": self._authority(),
                 "target_cell": list(target) if target else None,
+                # The proposal's block name rides with the cell so the body's
+                # consent can name the full OFFER {cell, block} — the mind honors
+                # exactly that pair even if its proposal moves before the yes.
+                "target_block": first_block,
                 "proposal_summary": summary,
                 "materials": self._materials_block,
                 # The agent executes a gather errand ONLY when state == "gather";

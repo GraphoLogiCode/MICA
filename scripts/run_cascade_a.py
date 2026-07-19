@@ -45,6 +45,13 @@ _CHAIN = [
     ("train_decoder.py", []),                    # Stage A NTP -> Stage B MTP
     ("run_decoder_eval.py", []),                 # OQ1 + gate freeze
     ("run_gate.py", []),                          # counterfactual gate + traces
+    # The contested-pairs comparison rides every cascade (rule v2, re-registered
+    # 2026-07-19 in the vault note): it writes the contested pairs itself (the
+    # relabel above writes agreed pairs only), trains two extra head sets against
+    # the fresh corpus, and prints + banks the pre-registered verdict. It never
+    # touches production models -- a "win" is a separate dated D3 amendment for
+    # the user to approve.
+    ("run_contested_comparison.py", ["--no-vlm"]),
 ]
 
 _PRE_MODELS = ["heads_v1.npz", "heads_v1.json", "arm1.npz", "arm1.json",

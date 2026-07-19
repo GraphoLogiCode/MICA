@@ -2610,3 +2610,27 @@ human's word, so miscalibration cannot place a block.
   (A7-filtered), so classify() reads the voiced suggestion as "ignored" today.
   Add an "accepted_explicitly" tier (voiced -> consent -> directive executed)
   to suggestion_acceptance -- the strongest acceptance datum there is.
+
+## 2026-07-19 -- contested-pairs comparison RE-REGISTERED (rule v2, runs at next cascade)
+
+The user asked whether training on the 15 contested sessions could improve
+accuracy. The 07-12 experiment said no ("withholding rule STANDS") -- but its
+inputs are all repaired since (idle leak was live in both arms, corpus predates
+the symmetry/anchor regeneration, both arms sat at pooled ECE ~0.45). The
+question re-asks on the fixed pipeline; v1 is history, not precedent.
+
+- [x] Re-registration v2 appended to the 07-12 vault note BEFORE any v2 run:
+  same arms (ALL 15 contested, builder's label as truth, NO selection -- and
+  VLM-based selection explicitly prohibited under the diagnostic-only pin);
+  eval set derives from the current corpus (4 reserved clean + all 9 discarded).
+- [x] Decision rule v2 implemented in run_contested_comparison.py: adopt-worthy
+  ONLY if all-eval final accuracy STRICTLY beats control (the off-template gain
+  the selection-bias hypothesis predicts) AND clean accuracy >= control AND
+  pooled ECE <= control + 0.02 AND mean sustained-from <= control + 0.02.
+- [x] Wired as the final step of run_cascade_a.py -- the comparison rides every
+  deliberate retrain; a win still changes nothing without a dated D3 amendment.
+- Rationale kept honest: matcher agreement IS template similarity, so
+  agreed-only training biases toward template-like builds while the headline
+  failure (never-seen floor 0.050) lives off-template. The v1 counter-lesson
+  (anti-associations from mislabeled evidence) stands as the risk the rule
+  tests against.

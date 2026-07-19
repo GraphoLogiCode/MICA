@@ -16,10 +16,18 @@ Chain:
      each arm's heads + its jointly-fitted knobs; print the table + the
      pre-registered verdict; write capture/raw/contested_comparison.json.
 
-The decision rule is pre-registered in the vault note and printed with the result:
-the contested arm "wins" only if clean-eval final accuracy >= control's AND pooled
-ECE <= control's + 0.02. A win does not change the pipeline — that would be a
-separate dated D3 amendment for the user.
+The decision rule is pre-registered in the vault note and printed with the result.
+RULE v2 (re-registered 2026-07-19, before any v2 run — the 07-12 verdict's inputs
+were all repaired since: idle leak, corpus regeneration, both arms at ECE ~0.45):
+the contested arm "wins" only if ALL FOUR hold —
+  1. all-eval final accuracy STRICTLY above control's (the off-template gain the
+     selection-bias hypothesis predicts; a tie is not a win),
+  2. clean-eval final accuracy >= control's,
+  3. pooled ECE <= control's + 0.02,
+  4. mean sustained-from <= control's + 0.02 (earliness not materially worse).
+A win does not change the pipeline — that would be a separate dated D3 amendment
+for the user. No contested-session selection of any kind (VLM-based selection is
+prohibited: the VLM is pinned diagnostic-only, 2026-07-19).
 """
 from __future__ import annotations
 
@@ -55,6 +63,7 @@ RESERVED = ("fabric-20260712-030849",   # infrastructure (clean)
             "fabric-20260705-002717")   # habitation (clean)
 PINNED_HOLDOUT_REAL = "fabric-20260705-134615"   # decorative (clean)
 ECE_TOLERANCE = 0.02
+SUSTAINED_TOLERANCE = 0.02          # rule v2: earliness may not materially regress
 
 ARMS = {"control": [], "contested": ["--include-contested-pairs"]}
 
@@ -184,12 +193,19 @@ def main() -> int:
         results[arm_name] = _eval_arm(TrainedHeads(f"heads_cmp_{arm_name}"), sessions)
 
     control, contested = results["control"], results["contested"]
-    verdict = (contested["clean_final_accuracy"] >= control["clean_final_accuracy"]
-               and contested["pooled_ece"] <= control["pooled_ece"] + ECE_TOLERANCE)
+    verdict = (contested["all_final_accuracy"] > control["all_final_accuracy"]
+               and contested["clean_final_accuracy"] >= control["clean_final_accuracy"]
+               and contested["pooled_ece"] <= control["pooled_ece"] + ECE_TOLERANCE
+               and contested["mean_sustained_from"]
+                   <= control["mean_sustained_from"] + SUSTAINED_TOLERANCE)
     report = {"eval_sessions": sessions, "arms": results,
-              "decision_rule": {"clean_accuracy_at_least_control": True,
-                                "ece_tolerance": ECE_TOLERANCE},
-              "verdict": ("CONTESTED-INCLUSION WINS — worth a D3 amendment decision"
+              "decision_rule": {"version": 2, "registered": "2026-07-19",
+                                "all_accuracy_strictly_above_control": True,
+                                "clean_accuracy_at_least_control": True,
+                                "ece_tolerance": ECE_TOLERANCE,
+                                "sustained_tolerance": SUSTAINED_TOLERANCE},
+              "verdict": ("CONTESTED-INCLUSION WINS (rule v2) — worth a D3 "
+                          "amendment decision"
                           if verdict else "withholding rule STANDS")}
     with open(_OUT, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=1)

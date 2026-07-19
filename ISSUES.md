@@ -2425,3 +2425,66 @@ live-stream overflow). Both real captures still PASS the gate.
   immune to out-of-range ids.
 
 **Tests:** 44 passing throughout. `run_d1 --pixels` on the real 285-record session: fidelity PASS, B1 contract PASS.
+
+## 2026-07-18 night -- first advisory session: rig verification findings
+
+Session fabric-20260718-194844 (production/crop_farm per matcher, awaiting user label).
+Live artifacts quarantined (correctly -- 46 events missed during a consumer gap);
+offline evidence RECOVERED by manual `after_game.py --evidence-only --redo-evidence`
+rerun with the GPU free: replay clean (45 snapshots, c=0), evidence_ready, awaiting_label.
+
+What happened, in order (rig_log, UTC): watcher started 23:47:12, world opened 92 s
+later -- pre-warm never finished, so run_live attached ~113 s late; it CRASHED 35 s
+after attaching, within ~1 s of the session's FIRST block event (tick 1306); the
+replacement attached 76 s later at tick 1951, so events 0-45 (ticks 1306-1915) were
+never seen live (the mod's socket does not buffer without a consumer -- by design,
+disk is the complete copy). The post-session chain then died in run_d2 AFTER its
+voxel replay PASSED -- most plausibly GPU contention with the eagerly re-armed
+run_live spawned 9 s before the chain's evidence step. Both tracebacks are
+unrecoverable: child stdout/stderr goes to the watcher console only.
+
+- [x] **FIXED -- acceptance signal v2** (namespace-blind block compare + causal
+  voicing pairing; tests pin both). v1 could NEVER score a follow on real data
+  (capture says "minecraft:x", proposals say "x"). True first-session lift is
+  -0.0022 (1 control follow / 450), not 0.0. D9 section 3 amended.
+- [ ] **R-1 BLOCKING (before relying on any chain verdict) -- after_game.py
+  conflates any run_d2 exit != 0 with STRUCTURE QUARANTINE** (after_game.py:353-357).
+  Tonight's session was stamped quarantined while its own replay report said
+  quarantined:false. Read voxel_replay_report.json's verdict (or give run_d2
+  distinct exit codes); a crash is not a quarantine.
+- [ ] **R-2 MAJOR -- GPU contention**: the eager rearm restarts run_live 10 s after
+  exit, racing the chain's run_d1/run_d2 GPU work (lan_autostart.js:199-204 vs
+  297-322). Defer the rearm until the chain finishes (or run chain steps first).
+- [ ] **R-3 MAJOR -- no child logs**: tee run_live's and each chain step's
+  stdout/stderr to per-session files (e.g. <sid>.chain-<step>.log, <sid>.runlive.log)
+  so the next crash is diagnosable (lan_autostart.js:107-124, 303-320). Tonight's
+  run_live crash cause is unknowable because of this.
+- [ ] **R-4 MAJOR -- failed sessions are invisible**: a session whose chain failed
+  never resurfaces (watcher retry comment at lan_autostart.js:319 is dead code for
+  closed sessions; awaiting_label:false hides it from the labeling GUI's backlog,
+  after_game.py:479-482). Surface quarantined/failed reports as read-only inbox
+  cards + a startup chain sweep for sessions without chain_done.
+- [ ] **R-5 MAJOR -- newest_capture returns rig_log.jsonl** for any no---session
+  invocation (mica/capture/discovery.py:13,23-26): its suffix blacklist misses
+  rig_log/agent-*/gate_trace/arm2_cache. Match only fabric-*.jsonl with manifests.
+- [ ] **R-6 MINOR -- every voiced suggestion says the generic fallback**: 
+  proposal_summary is gated on held_k >= 1 (live_loop.py:294-297) but SUGGEST is
+  by construction the K_commit==0 state (fsm.py:205-208), so the body always says
+  "the next piece" and logs summary:null. Build the summary from the proposal
+  whenever one exists (same data as proposal_first).
+- [ ] **R-7 MINOR -- mixed-generation artifacts after a failed d2**: plain
+  evidence2d was regenerated but evidence3d stayed the banked live copy until the
+  manual rerun. Have the failure path rename/delete un-regenerated plain siblings.
+- [ ] **R-8 MINOR -- manual label on a quarantined session burns ~4.5 min of GPU**
+  before refusing (process_one lacks the batch path's up-front report check,
+  after_game.py:333-357 vs 420-422).
+- [ ] **OPERATIONAL (runbook): give the rig a head start** -- start the watcher,
+  wait for "models pre-warming" to finish (~3.5 min cold) BEFORE opening the world;
+  tonight's entire live loss traces to a 92 s head start.
+- Verified working tonight: proposal_first on all 451 gate reads; body voiced log +
+  30 s throttle; suggestion_acceptance join (pairing now causal); labeling-tool
+  discovery/ingest of the dated layout (JsonlSource parses the capture end to end,
+  11005 packets, 364/364 events); A7 no-op confirmed (agent placed nothing; all
+  364 events HumanBuilder). Gate reads: mean 378 ms, p90 524 ms, 1/451 over the
+  1 s budget (worst 1256 ms, late-session, not warmup) -- live headroom is ~2x,
+  not the 5x the offline measurement implied.

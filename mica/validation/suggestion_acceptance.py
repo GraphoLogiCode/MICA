@@ -23,7 +23,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-ACCEPTANCE_VERSION = "1"
+# v2 (2026-07-18): two implementation-bug fixes after the first real session, no
+# semantic change to the pre-registered constants. (1) Block names are compared
+# namespace-blind — the capture writes "minecraft:spruce_planks" while proposals
+# carry "spruce_planks", so v1 could never score a follow on real data. (2) A
+# voicing pairs with the latest matching read AT OR BEFORE it (a voicing cannot
+# come from a read that hadn't happened yet); v1's nearest-|gap| match let body
+# latency attach it to the following read.
+ACCEPTANCE_VERSION = "2"
 FOLLOW_WINDOW_TICKS = 600   # 30 s at 20 ticks/s — how long a suggestion stays open
 NEAR_RADIUS = 2             # Chebyshev: "followed near" = same block within this box
 TYPE_RADIUS = 8             # "followed type" = same block anywhere within this box
@@ -45,6 +52,12 @@ def _chebyshev(a, b) -> int:
     return max(abs(a[0] - b[0]), abs(a[1] - b[1]), abs(a[2] - b[2]))
 
 
+def _bare(block: str) -> str:
+    # "minecraft:spruce_planks" and "spruce_planks" are the same block: the
+    # capture keeps the namespace, the gate's proposals do not.
+    return block.rsplit(":", 1)[-1]
+
+
 def classify(tick: int, block: str, cell, human_places) -> str:
     """What the human did in the window after one suggestion.
 
@@ -53,8 +66,11 @@ def classify(tick: int, block: str, cell, human_places) -> str:
     Tiers are checked strongest-first; `contradicted` outranks the weak tiers
     because a different block at the exact suggested cell is an answer, not noise.
     """
-    window = [p for p in human_places if tick < p[0] <= tick + FOLLOW_WINDOW_TICKS]
+    window = [(t, pos, _bare(name))
+              for t, pos, name in human_places
+              if tick < t <= tick + FOLLOW_WINDOW_TICKS]
     cell = tuple(cell)
+    block = _bare(block)
     for _, pos, name in window:
         if tuple(pos) == cell and name == block:
             return "followed_exact"
@@ -83,6 +99,13 @@ def pair_voicings(voiced_rows, trace_rows, tick_of_ms) -> tuple[list[dict], int]
     voicing with no proposal-bearing SUGGEST/PREVIEW read within VOICE_MATCH_TICKS
     is dropped and counted — a mismatch means clock or logging trouble, and the
     report must show it rather than absorb it.
+
+    A voicing comes from a read that ALREADY happened, so among candidates in the
+    window the latest read at-or-before the voiced tick wins; a read after it is
+    only accepted when nothing precedes it (clock skew). When the voiced row logs
+    the proposal cell, only reads proposing that cell are candidates — the body's
+    ~2 s speaking latency spans a read boundary at 1 Hz, and the cell pins which
+    read actually produced the words.
     """
     candidates = [r for r in trace_rows
                   if r.get("proposal_first")
@@ -90,12 +113,19 @@ def pair_voicings(voiced_rows, trace_rows, tick_of_ms) -> tuple[list[dict], int]
     paired, unmatched = [], 0
     for voiced in voiced_rows:
         tick = tick_of_ms(voiced["ts"])
-        best = None
-        for row in candidates:
-            gap = abs(row["tick"] - tick)
-            if gap <= VOICE_MATCH_TICKS and (best is None or gap < abs(best["tick"] - tick)):
-                best = row
-        if best is None:
+        pool = candidates
+        if voiced.get("cell") is not None:
+            same_cell = [r for r in candidates
+                         if tuple(r["proposal_first"]["cell"]) == tuple(voiced["cell"])]
+            if same_cell:
+                pool = same_cell
+        in_window = [r for r in pool if abs(r["tick"] - tick) <= VOICE_MATCH_TICKS]
+        before = [r for r in in_window if r["tick"] <= tick]
+        if before:
+            best = max(before, key=lambda r: r["tick"])
+        elif in_window:
+            best = min(in_window, key=lambda r: r["tick"] - tick)
+        else:
             unmatched += 1
             continue
         paired.append(best)

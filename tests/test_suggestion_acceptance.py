@@ -29,6 +29,17 @@ def test_outcome_tiers_strongest_first():
                            [_place(150, (40, 64, 40))]) == "ignored"
 
 
+def test_block_names_match_across_the_namespace_gap():
+    # the capture writes "minecraft:spruce_planks", proposals say "spruce_planks";
+    # v1 compared them raw, so no follow tier could ever fire on real data
+    cell = (10, 64, 10)
+    assert accept.classify(100, "spruce_planks", cell,
+                           [_place(150, cell, "minecraft:spruce_planks")]) == "followed_exact"
+    # and a genuinely different namespaced block at the cell is still an answer
+    assert accept.classify(100, "spruce_planks", cell,
+                           [_place(150, cell, "minecraft:stone")]) == "contradicted"
+
+
 def test_window_edges_are_pre_registered():
     cell = (0, 64, 0)
     # a placement exactly at tick + window counts; one tick later does not;
@@ -81,3 +92,26 @@ def test_pair_voicings_matches_nearest_read_and_counts_unmatched():
         rows, lambda ms: int(ms / 50))
     assert [r["tick"] for r in paired] == [100, 300]
     assert unmatched == 1                                    # tick 1980: nothing near
+
+
+def test_pair_voicings_never_attaches_to_a_read_from_the_future():
+    # the body speaks ~2 s after the read that produced the words, so at 1 Hz the
+    # NEXT read is often nearer to the voiced tick — but a voicing cannot come
+    # from a read that hadn't happened yet (the 2026-07-18 session paired wrong)
+    rows = [_row(100, "suggest"), _row(120, "suggest", cell=(30, 64, 30))]
+    paired, unmatched = accept.pair_voicings(
+        [{"ts": 5_900}],                                     # tick 118: nearest is 120
+        rows, lambda ms: int(ms / 50))
+    assert [r["tick"] for r in paired] == [100]
+    assert unmatched == 0
+
+
+def test_pair_voicings_prefers_the_read_proposing_the_logged_cell():
+    # when the voiced row logs the cell it spoke about, only reads proposing that
+    # cell are candidates — even if another read sits closer in time
+    rows = [_row(100, "suggest", cell=(10, 64, 10)),
+            _row(110, "suggest", cell=(30, 64, 30))]
+    paired, _ = accept.pair_voicings(
+        [{"ts": 5_600, "cell": [10, 64, 10]}],               # tick 112: nearer to 110
+        rows, lambda ms: int(ms / 50))
+    assert [tuple(r["proposal_first"]["cell"]) for r in paired] == [(10, 64, 10)]

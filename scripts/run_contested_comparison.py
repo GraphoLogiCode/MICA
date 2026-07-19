@@ -79,6 +79,19 @@ def _run(script: str, *args: str) -> None:
         raise SystemExit(f"{script} exited {code} — comparison halted")
 
 
+def _quarantined(sid: str) -> bool:
+    """The quarantine rule, applied here like everywhere else: a structure-
+    quarantined session's banked evidence is untrustworthy (210003's truncated
+    bank was invisible under the old silent zip-truncation and crashes honestly
+    under the hardened fuse — either way it must not be evaluated)."""
+    path = os.path.join(session_store.session_dir(sid), "session_report.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return bool(json.load(handle).get("structure_quarantined"))
+    except (OSError, ValueError):
+        return False
+
+
 def _eval_sessions() -> dict[str, dict]:
     """The frozen shared eval set: the 4 clean sessions + every discarded one.
     Truth is always the BUILDER's category. Neither arm has pairs for any of these
@@ -92,6 +105,9 @@ def _eval_sessions() -> dict[str, dict]:
         chosen[sid] = {"truth": labels[sid]["goal"], "kind": "clean"}
     for sid, row in sorted(rows.items()):
         if row.get("label") and not row["label"].get("kept"):
+            if _quarantined(sid):
+                print(f"  eval set: {sid} skipped (structure-quarantined bank)")
+                continue
             chosen[sid] = {"truth": labels[sid]["goal"], "kind": "discarded"}
     return chosen
 

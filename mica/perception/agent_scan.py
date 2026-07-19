@@ -60,13 +60,15 @@ def load_scan(path: str) -> list[ScanSweep]:
 
 
 def accumulate(sweeps: Iterable[ScanSweep]) -> dict[Cell, str]:
-    """Every cell the scan has seen, with the block it saw there — first sighting
-    wins (the agent's body already dedupes, so a repeat only appears across a
-    rotated-file boundary; keeping the first matches the body's own rule)."""
+    """Every cell the scan has seen, with the block it saw there — the LAST
+    sighting wins. The body re-records a cell whenever its block changes
+    (2026-07-19: the old once-forever rule made everything built on
+    already-scanned ground invisible to the scan), so the newest record is the
+    current truth and this accumulation must agree with it."""
     seen: dict[Cell, str] = {}
     for sweep in sweeps:
         for x, y, z, block in sweep.cells:
-            seen.setdefault((x, y, z), block)
+            seen[(x, y, z)] = block
     return seen
 
 

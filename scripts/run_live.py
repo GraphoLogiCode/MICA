@@ -397,7 +397,23 @@ def _write_live_status(path: str, session_id: str, pipeline: LivePipeline,
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(status, handle)
-    os.replace(tmp, path)
+    # Windows: os.replace fails with WinError 5 when a READER (FlowViz polls this
+    # file; the agent reads it too) holds the destination without delete-sharing
+    # at the exact swap instant. This is a DISPLAY file — a failed swap must never
+    # reach the stream loop's OSError handler, which reads it as "live stream
+    # lost" and ends live processing (it did, 2026-07-19: two sessions' point
+    # clouds froze mid-play). Retry briefly, then skip this write; the next one
+    # is a second away.
+    for attempt in range(3):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError:
+            time.sleep(0.02)
+    try:
+        os.remove(tmp)                        # give up on THIS write, not the session
+    except OSError:
+        pass
 
 
 def _load_h3d(h3d_on: bool):

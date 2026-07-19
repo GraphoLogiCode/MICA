@@ -263,7 +263,12 @@ function start(port) {
   }
   rotateAside(scanPath);
   rotateAside(statusPath);
-  const scanSeen = new Set();     // "x,y,z" of every cell recorded this session
+  // "x,y,z" -> the block name last recorded there. A cell RE-RECORDS when its
+  // block changes (2026-07-19: the old once-forever Set meant everything the
+  // human built on already-scanned ground never entered the scan — the walls
+  // rose from scanned grass and stayed invisible). Broken blocks are not
+  // emitted as removals: the ray simply hits whatever is behind next sweep.
+  const scanSeen = new Map();
   let scanSessionId = null;       // the capture session the mind says is open —
                                   // sticky: kept after the pipeline goes quiet, so
                                   // late sweeps still say which session they saw
@@ -1021,8 +1026,8 @@ function start(port) {
         if (!hit || !hit.position || hit.name === 'air') continue;
         const p = hit.position;
         const key = `${p.x},${p.y},${p.z}`;
-        if (scanSeen.has(key)) continue;
-        scanSeen.add(key);
+        if (scanSeen.get(key) === hit.name) continue;   // unchanged since last look
+        scanSeen.set(key, hit.name);
         found.push([p.x, p.y, p.z, hit.name]);
       }
     }

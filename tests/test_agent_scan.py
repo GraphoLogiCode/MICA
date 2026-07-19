@@ -38,11 +38,14 @@ def test_load_scan_tolerates_a_torn_tail_and_qualifies_names(tmp_path):
     assert sweeps[1].cells[0][3] == "minecraft:stone"
 
 
-def test_accumulate_first_seen_wins(tmp_path):
+def test_accumulate_last_seen_wins(tmp_path):
+    # 2026-07-19: the body re-records a cell when its block CHANGES (the human
+    # built a wall on already-scanned grass and it stayed invisible under the
+    # old first-wins rule) -- the newest sighting is the current truth
     path = _write_scan(tmp_path / "s.jsonl",
                        [[[0, 64, 0, "oak_planks"]], [[0, 64, 0, "stone"], [1, 64, 0, "glass"]]])
     seen = accumulate(load_scan(path))
-    assert seen[(0, 64, 0)] == "minecraft:oak_planks"        # the first sighting stands
+    assert seen[(0, 64, 0)] == "minecraft:stone"             # the block changed; keep the new one
     assert seen[(1, 64, 0)] == "minecraft:glass"
 
 

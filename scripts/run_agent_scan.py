@@ -141,7 +141,7 @@ def main() -> int:
     running: dict = {}
     for sweep in sweeps:
         for x, y, z, block in sweep.cells:
-            running.setdefault((x, y, z), block)
+            running[(x, y, z)] = block          # last sighting wins, like accumulate()
         seen_of_built, built_count = coverage(running, built)
         curve.append({"ts": sweep.ts, "tick": sweep.tick,
                       "scanned": len(running), "built_seen": seen_of_built,

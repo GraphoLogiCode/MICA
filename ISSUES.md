@@ -2482,14 +2482,18 @@ unrecoverable: child stdout/stderr goes to the watcher console only.
   single-dot, manifest sidecar required (captures recognized by what they ARE);
   the derived-suffix blacklist is gone. Tested against every .jsonl class that
   bit a caller; live check returns a real capture, not rig_log.
-- [ ] **R-6 MINOR -- every voiced suggestion says the generic fallback**: 
-  proposal_summary is gated on held_k >= 1 (live_loop.py:294-297) but SUGGEST is
-  by construction the K_commit==0 state (fsm.py:205-208), so the body always says
-  "the next piece" and logs summary:null. Build the summary from the proposal
-  whenever one exists (same data as proposal_first).
-- [ ] **R-7 MINOR -- mixed-generation artifacts after a failed d2**: plain
-  evidence2d was regenerated but evidence3d stayed the banked live copy until the
-  manual rerun. Have the failure path rename/delete un-regenerated plain siblings.
+- [x] **R-6 FIXED (2026-07-19) -- suggestions name what they propose**:
+  proposal_summary (now a tested module-level helper in live_loop) builds a noun
+  phrase from any placement proposal regardless of held_k -- "a stone_bricks
+  block at (282, 70, 188)" -- adding the commit count when held_k >= 1;
+  non-placement proposals keep the old line. Body side: re-voices only when the
+  offer itself changed (lastVoicedSummary), not every 30 s for the same words;
+  the voiced log's summary field is now self-describing.
+- [x] **R-7 FIXED (2026-07-19) -- no mixed-generation pairs**: any run_d2 failure
+  (quarantine or crash) shelves the plain evidence3d/fused/belief siblings to
+  *.stale.jsonl (tested, incl. repeat-crash re-shelving) -- a fresh evidence2d
+  can never sit next to a stale or torn partner; the live-quarantined bank keeps
+  the live record and the retry's --overwrite regenerates from scratch.
 - [x] **R-8 FIXED (2026-07-19, with R-4)**: process_one refuses a recorded
   structure quarantine up front (seconds, clear message); --redo-evidence is the
   deliberate retry.

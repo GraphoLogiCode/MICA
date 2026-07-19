@@ -45,6 +45,28 @@ def gate_ready() -> bool:
     return decoder_model.available() and os.path.exists(_GATE_META)
 
 
+def proposal_summary(proposal, target, held_k: int, top_goal: str) -> str | None:
+    """The advisory line's noun phrase — the body says "I could add {this}".
+
+    Names WHAT and WHERE whenever the decoder proposed a placement. SUGGEST is by
+    construction the K_commit == 0 state, so the old held_k >= 1 requirement made
+    every voiced suggestion say the generic fallback and log a null summary (R-6,
+    2026-07-18 review) — the whole session, nobody ever heard what the agent
+    actually wanted to place."""
+    if proposal is None:
+        return None
+    first = proposal.actions[0]
+    if target is not None and isinstance(first, Place):
+        summary = f"a {materials.normalize(first.block)} block at {target}"
+        if held_k >= 1:
+            summary += f" ({held_k} action(s) committed toward {top_goal})"
+        return summary
+    if held_k >= 1:
+        # non-placement proposals keep the old commit-count line
+        return f"{held_k} action(s) toward {top_goal}, first at {target}"
+    return None
+
+
 class LiveGateRunner:
     """Feed me events as they arrive and call read() once per display tick."""
 
@@ -291,10 +313,7 @@ class LiveGateRunner:
         gate_read, proposal, positions, raw_k, held_k, target = self._decide(
             self._materialized(belief, status), fused, status)
         decision, candidate = self.fsm.read(gate_read)
-        summary = None
-        if proposal is not None and held_k >= 1:
-            summary = (f"{held_k} action(s) toward {gate_read.top_goal}, "
-                       f"first at {target}")
+        summary = proposal_summary(proposal, target, held_k, gate_read.top_goal)
         # The placement directive (§9 amendment 2026-07-12): at most ONE block per
         # read — the first committed action, only when it is a Place, only at a cell
         # the agent has not already filled. The body executes; this only authorizes.

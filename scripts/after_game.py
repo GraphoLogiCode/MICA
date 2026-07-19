@@ -156,6 +156,24 @@ def _fresh_replay_quarantine(report_path: str, since: float) -> bool:
         return False
 
 
+def _shelve_stale_evidence(session_id: str) -> None:
+    """After a failed run_d2, the plain evidence files are generation-mismatched:
+    run_d1 just rewrote evidence2d, but evidence3d (and the live loop's fused/
+    belief logs) predate this regen — or worse, evidence3d is a torn mid-write.
+    Move them aside as *.stale.jsonl so no reader (human or script) can pair the
+    fresh evidence2d with a stale sibling; a live-quarantined bank, when one
+    exists, still holds the live record, and the retry's --overwrite regenerates
+    the plain files from scratch (R-7, 2026-07-18 review)."""
+    for suffix in (".evidence3d.jsonl", ".fused.jsonl", ".belief.jsonl"):
+        plain = session_store.session_file(session_id, suffix)
+        if not os.path.exists(plain):
+            continue
+        shelved = plain[:-len(".jsonl")] + ".stale.jsonl"
+        os.replace(plain, shelved)
+        print(f"  shelved {os.path.basename(plain)} -> *.stale.jsonl "
+              "(would pair a stale generation with the fresh evidence2d)")
+
+
 def _upsert_label(session_id: str, goal: str, subtype: str, note: str) -> None:
     labels = _load_labels()
     entry = labels.get(session_id, {})
@@ -381,6 +399,7 @@ def process_one(session_id: str, goal: str | None, subtype: str | None, no_vlm: 
         d2_started = time.time()
         d2 = _run("run_d2.py", jsonl, "--h3d", "--overwrite")
         if d2 != 0:
+            _shelve_stale_evidence(session_id)
             replay = session_store.session_file(session_id, ".voxel_replay_report.json")
             if _fresh_replay_quarantine(replay, d2_started):
                 print("  run_d2 replay verdict: STRUCTURE QUARANTINE (unexplained "

@@ -541,6 +541,10 @@ function start(port) {
   // only as the fallback for gate-less runs (exactly the handover the vault pinned).
   let lastGateChatMs = 0;
   let lastGateState = null;
+  // R-6: summaries are no longer null in suggest state, so "re-voice when a
+  // summary exists" would repeat the identical offer every 30 s. Re-voice only
+  // when the offer itself changed (new block/cell), or on a state change.
+  let lastVoicedSummary = null;
   let yieldUntilMs = 0;
   function renderGate(gate) {
     if (!gate || !gate.state) return false;
@@ -553,8 +557,11 @@ function start(port) {
     } else if ((gate.state === 'suggest' || gate.state === 'preview')
                && process.env.MICA_QUIET !== '1' && agentState === 'present'
                && now - lastGateChatMs >= ADVISORY_GAP_MS
-               && (gate.state !== lastGateState || gate.proposal_summary)) {
+               && (gate.state !== lastGateState
+                   || (gate.proposal_summary
+                       && gate.proposal_summary !== lastVoicedSummary))) {
       lastGateChatMs = now;
+      lastVoicedSummary = gate.proposal_summary || null;
       if (gate.state === 'suggest') {
         bot.chat(`Shall I help? I could add ${gate.proposal_summary || 'the next piece'}`
           + ` (conf ${Math.round((gate.conf || 0) * 100)}%)`);

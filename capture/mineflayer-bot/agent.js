@@ -680,11 +680,15 @@ function start(port) {
     // When placement is armed and the gate is short a block with NO substitute to
     // offer (ask above is null), say plainly what is needed so the human can toss
     // it over. Once per shortage — a new request only when the missing set changes
-    // — and the thank-you in liveTick confirms receipt.
+    // — and the thank-you in liveTick confirms receipt. Consent authority counts
+    // as armed (D5 §10): a yes can only be honored with the block in hand, so the
+    // agent must be allowed to ask for it (2026-07-19: it silently starved while
+    // the human handed it the wrong block).
     const missing = (gate.materials && gate.materials.missing) || {};
     const needSig = Object.keys(missing).sort()
       .map((block) => `${block}:${missing[block]}`).join(',');
-    if (gate.authority === 'place' && needSig && !ask && !placeStopped
+    if ((gate.authority === 'place' || gate.authority === 'consent')
+        && needSig && !ask && !placeStopped
         && agentState === 'present' && process.env.MICA_QUIET !== '1'
         && needSig !== lastNeedSig && now - lastNeedMs >= ADVISORY_GAP_MS) {
       lastNeedMs = now;

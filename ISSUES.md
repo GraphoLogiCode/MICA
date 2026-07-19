@@ -2507,3 +2507,33 @@ unrecoverable: child stdout/stderr goes to the watcher console only.
   364 events HumanBuilder). Gate reads: mean 378 ms, p90 524 ms, 1/451 over the
   1 s budget (worst 1256 ms, late-session, not warmup) -- live headroom is ~2x,
   not the 5x the offline measurement implied.
+
+## 2026-07-19 -- VLM cross-check role resolved: DIAGNOSTIC ONLY (code-vs-vault conflict)
+
+Finding (user, verified by two independent sweeps): the finished-build VLM
+cross-check decides NOTHING. The builder-vs-matcher contest is settled inside
+_label_real() (agrees_with_builder / pairs_withheld) before the VLM runs in
+main(); every consumer of the vlm field is display-only (report JSON,
+inspect.md line, labeling-tool card, console print); cascade eligibility reads
+kept + agrees_with_builder only. Three texts claimed otherwise: D3 line ~100
+("the VLM arbitrates", the 193059 amendment), its Step-by-Step echo, and the
+comment at label_finished_builds.py:132 -- the single "arbitrat" hit in all
+Python. The rest of the record already said confirm/contest-only, and this
+file's own 2026-07-06 entry called the VLM "too noisy to arbitrate".
+
+- [x] **User decision: Option A -- vault follows code.** The VLM is pinned
+  DIAGNOSTIC ONLY. Fixed the :132 comment; dated corrections in D3 (line ~100
+  amendment + a display-only confirmation at the ~106 pin) and the
+  Step-by-Step echo. No logic changed anywhere; no pairs move.
+- **Scope guard added at D3's validation record**: the 94% (n=16) is BINARY
+  clip-verdict agreement with the sole annotator -- one graded negative,
+  missed -- and licenses nothing about the five-way finished-build call,
+  which has no accuracy number. Never cite it as arbitration evidence.
+- **Bar for ever revisiting (Option B)**: a five-way accuracy number against
+  known truth (the scripted corpus is the only known-truth set and has ZERO
+  rendered frames -- rendering comes first), plus a second-annotator story;
+  until then the VLM verdict stays a filed opinion.
+- Corrected stakes on the 34 real sessions: 10 matcher-agreed, 15 contested
+  (VLM sided with the builder 7, the matcher 4, a THIRD category 3, no
+  verdict 1), 9 discarded on score/margin alone. The VLM's 7 builder-side
+  votes changed nothing -- all 15 contested sessions have pairs withheld.

@@ -129,7 +129,12 @@ def _label_real() -> list[dict]:
             # The 193059 lesson: a KEPT matcher verdict can still be wrong on a real
             # free build (it confidently read the builder's HOUSE as a fountain).
             # A contested label must never become training pairs — the builder's
-            # word outranks the matcher, and the VLM cross-check arbitrates below.
+            # word outranks the matcher, full stop. The VLM cross-check that main()
+            # attaches later is DIAGNOSTIC ONLY: recorded in the report for a human
+            # to read, consumed by no decision path (corrected 2026-07-19 — this
+            # comment used to say it "arbitrates below", which nothing ever did;
+            # its only validation is binary clip-agreement with a single annotator,
+            # which licenses no arbitration).
             entry["pairs_withheld"] = "matcher contests the builder's label"
             if "--contested-pairs" in sys.argv:
                 # The pre-registered comparison experiment (2026-07-12 note): write

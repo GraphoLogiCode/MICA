@@ -267,6 +267,13 @@ function start(port) {
   let scanSessionId = null;       // the capture session the mind says is open —
                                   // sticky: kept after the pipeline goes quiet, so
                                   // late sweeps still say which session they saw
+  // The consent route's state (D5 §10, 2026-07-19) lives up here because
+  // writeStatus reads pendingConsent and runs at startup — a declaration further
+  // down is a temporal-dead-zone crash on launch (it happened, 2026-07-19).
+  const CONSENT_WINDOW_MS = 60000;
+  let lastVoicedCell = null;
+  let lastVoicedMs = 0;
+  let pendingConsent = null;
   let agentState = 'connecting';
   let lastAction = null;
   let followMode = 'holding';
@@ -594,11 +601,8 @@ function start(port) {
   // it knows what was offered — it hears the human's "yes", remembers WHICH cell
   // was on offer, and relays {ts, cell} in its status line for the mind to
   // honor. One yes per voicing; a pending materials ask outranks (its yes
-  // answers the ask, exactly as before).
-  const CONSENT_WINDOW_MS = 60000;
-  let lastVoicedCell = null;
-  let lastVoicedMs = 0;
-  let pendingConsent = null;
+  // answers the ask, exactly as before). State declared with the early vars
+  // above (writeStatus reads it at startup).
   let yieldUntilMs = 0;
   function renderGate(gate) {
     if (!gate || !gate.state) return false;

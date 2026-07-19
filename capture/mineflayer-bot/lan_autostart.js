@@ -56,6 +56,17 @@ const MANIFEST_POLL_MS = 5000;       // fallback sweep when fs.watch misses an e
 const RAW_ROOTS = (process.env.MICA_RAW_DIRS
   || path.join(MICA_ROOT, 'capture', 'raw')).split(';').map(s => s.trim()).filter(Boolean);
 const LOG_PATH = path.join(RAW_ROOTS[0], 'rig_log.jsonl');
+// Every child's console output is ALSO appended to a file here: the watcher
+// console is ephemeral, and on 2026-07-18 it ate the tracebacks of both a
+// run_live crash and a chain-step crash, leaving the failures undiagnosable.
+// One file per child spawn / chain step; nothing reads them back — delete freely.
+const CHILD_LOGS = path.join(RAW_ROOTS[0], 'child_logs');
+try { fs.mkdirSync(CHILD_LOGS, { recursive: true }); } catch (err) { /* logged children just lose their file */ }
+
+function stamp() {
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
 
 // The post-session chain, in order — data, not code: add or remove steps here.
 // Each step is a python script under scripts/ with args built from the session id.
@@ -104,9 +115,17 @@ function loadProcessedFromLog() {
 
 // ------------------------------------------------------- child output piping
 
-function tagPipe(child, tag, onLine) {
+function tagPipe(child, tag, onLine, logPath) {
   // One console, tagged lines. run_live redraws its status with \r, so treat
   // \r as a line break too — each redraw just becomes its own log line here.
+  // When logPath is given, every line is also appended there, and the file is
+  // flushed on child exit — a crash's last words must survive the console.
+  let sink = null;
+  if (logPath) {
+    sink = fs.createWriteStream(logPath, { flags: 'a' });
+    sink.on('error', () => { sink = null; });   // logging must never kill the child
+  }
+  const keep = (line) => { if (sink) sink.write(line + '\n'); };
   let buffers = { stdout: '', stderr: '' };
   for (const stream of ['stdout', 'stderr']) {
     child[stream].setEncoding('utf8');
@@ -117,10 +136,20 @@ function tagPipe(child, tag, onLine) {
       for (const line of lines) {
         if (!line.trim()) continue;
         console.log(`[${tag}] ${line}`);
+        keep(line);
         if (onLine) onLine(line);
       }
     });
   }
+  child.on('close', () => {
+    for (const stream of ['stdout', 'stderr']) {
+      if (buffers[stream].trim()) {        // a traceback's torn last line still lands
+        console.log(`[${tag}] ${buffers[stream]}`);
+        keep(buffers[stream]);
+      }
+    }
+    if (sink) sink.end();
+  });
 }
 
 // ------------------------------------------------- trigger 1: game launched
@@ -174,6 +203,7 @@ function spawnRunLive() {
   // default so an unattended rig keeps the demo posture; logged below so rig_log
   // records which authority every session ran under.
   const placeArgs = process.env.MICA_PLACE === '1' ? ['--place'] : [];
+  const liveLog = path.join(CHILD_LOGS, `runlive-${stamp()}.log`);
   runLive = spawn(PYTHON,
     ['scripts/run_live.py', '--wait-session', '--heads', 'v1', ...placeArgs],
     { cwd: MICA_ROOT, stdio: ['ignore', 'pipe', 'pipe'],
@@ -185,7 +215,7 @@ function spawnRunLive() {
       runLiveSession = match[1];
       log('runlive_attached', { session: runLiveSession });
     }
-  });
+  }, liveLog);
   runLive.on('error', (err) =>
     log('error', { detail: `could not start run_live (${err.message}) — is ${PYTHON} on PATH?` }));
   runLive.on('exit', (code) => {
@@ -193,7 +223,9 @@ function spawnRunLive() {
     runLive = null;
     runLiveSession = null;
     log('runlive_exit', { session: sid || undefined,
-                          exit_code: code === null ? 'killed' : code });
+                          exit_code: code === null ? 'killed' : code,
+                          ...(code !== 0 && code !== null
+                              ? { child_log: path.relative(RAW_ROOTS[0], liveLog) } : {}) });
     if (shuttingDown) return;
     if (sid) runChain(sid);
     if (PREWARM === 'eager') {
@@ -227,7 +259,7 @@ function spawnAgent(port) {
     cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, MICA_PORT: String(port) },
   });
-  tagPipe(agent, 'agent');
+  tagPipe(agent, 'agent', null, path.join(CHILD_LOGS, `agent-${stamp()}.log`));
   agent.on('error', (err) => log('error', { detail: `could not start agent (${err.message})` }));
   agent.on('exit', (code) => {
     agent = null;
@@ -300,10 +332,11 @@ function runStep(sid, index, done) {
     return done();
   }
   const step = POST_SESSION_STEPS[index];
+  const stepLog = path.join(CHILD_LOGS, `chain-${sid}-${step.name}.log`);
   log('step_start', { session: sid, step: step.name });
   const child = spawn(PYTHON, [path.join('scripts', step.script), ...step.args(sid)],
     { cwd: MICA_ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-  tagPipe(child, step.name);
+  tagPipe(child, step.name, null, stepLog);
   child.on('error', (err) => {
     log('step_fail', { session: sid, step: step.name, detail: err.message });
     done();
@@ -315,6 +348,7 @@ function runStep(sid, index, done) {
     } else {
       log('step_fail', { session: sid, step: step.name,
                          exit_code: code === null ? 'killed' : code,
+                         child_log: path.relative(RAW_ROOTS[0], stepLog),
                          detail: 'chain stopped for this session; watcher keeps running' });
       done();   // no chain_done: a watcher restart may retry this session
     }

@@ -2447,18 +2447,21 @@ unrecoverable: child stdout/stderr goes to the watcher console only.
   voicing pairing; tests pin both). v1 could NEVER score a follow on real data
   (capture says "minecraft:x", proposals say "x"). True first-session lift is
   -0.0022 (1 control follow / 450), not 0.0. D9 section 3 amended.
-- [ ] **R-1 BLOCKING (before relying on any chain verdict) -- after_game.py
-  conflates any run_d2 exit != 0 with STRUCTURE QUARANTINE** (after_game.py:353-357).
-  Tonight's session was stamped quarantined while its own replay report said
-  quarantined:false. Read voxel_replay_report.json's verdict (or give run_d2
-  distinct exit codes); a crash is not a quarantine.
+- [x] **R-1 FIXED (2026-07-18 night) -- a crash is not a quarantine**: after_game's
+  d2-failure branch now stamps STRUCTURE QUARANTINE only when THIS run's
+  voxel_replay_report.json (mtime-checked against the run_d2 start) says
+  quarantined; any other non-zero exit is a retryable chain failure that writes
+  no report (same honesty rule as the run_d1 branch). Helper
+  _fresh_replay_quarantine + tests/test_after_game_quarantine_verdict.py.
 - [ ] **R-2 MAJOR -- GPU contention**: the eager rearm restarts run_live 10 s after
   exit, racing the chain's run_d1/run_d2 GPU work (lan_autostart.js:199-204 vs
   297-322). Defer the rearm until the chain finishes (or run chain steps first).
-- [ ] **R-3 MAJOR -- no child logs**: tee run_live's and each chain step's
-  stdout/stderr to per-session files (e.g. <sid>.chain-<step>.log, <sid>.runlive.log)
-  so the next crash is diagnosable (lan_autostart.js:107-124, 303-320). Tonight's
-  run_live crash cause is unknowable because of this.
+- [x] **R-3 FIXED (2026-07-18 night) -- child output persisted**: tagPipe now also
+  appends every line (incl. a torn traceback tail, flushed on child close) to
+  capture/raw/child_logs/ -- runlive-<ts>.log, agent-<ts>.log,
+  chain-<sid>-<step>.log; runlive_exit and step_fail rig_log rows carry the
+  child_log path on failure. Verified live: a watcher smoke-start captured
+  run_live's real stderr to the file. Delete old logs freely; nothing reads them.
 - [ ] **R-4 MAJOR -- failed sessions are invisible**: a session whose chain failed
   never resurfaces (watcher retry comment at lan_autostart.js:319 is dead code for
   closed sessions; awaiting_label:false hides it from the labeling GUI's backlog,

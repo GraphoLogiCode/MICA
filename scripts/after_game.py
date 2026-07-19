@@ -34,8 +34,12 @@ build against the builder's stated goal, and writes a per-session `inspect.md` +
 `session_report.json`. It STOPS before any retrain: matcher-agreed captures stack up
 and `--status` tells you when the batch is worth firing `run_cascade_a.py`.
 
-A structure quarantine (run_d2 exits non-zero: an unexplained voxel divergence, not a
-recoverable socket drop) flags the session and skips labeling — it is not proof-grade.
+A structure quarantine (run_d2's own replay verdict: an unexplained voxel divergence,
+not a recoverable socket drop) flags the session and skips labeling — it is not
+proof-grade. Any OTHER run_d2 failure (a crash, missing assets, GPU contention) is a
+retryable chain failure: no report is written, the session stays un-ready, and a rerun
+decides. Only the replay's fresh verdict may stamp a quarantine — on 2026-07-18 a
+GPU-contention crash was mislabeled STRUCTURE QUARANTINE and parked a clean session.
 """
 from __future__ import annotations
 
@@ -135,6 +139,21 @@ def _bank_quarantined_live(session_id: str) -> bool:
     print("  live loop was quarantined (socket drops) — banked *.live-quarantined.*; "
           "regenerating from the authoritative disk copy")
     return True
+
+
+def _fresh_replay_quarantine(report_path: str, since: float) -> bool:
+    """True only when run_d2's voxel replay report was written by THIS run and says
+    quarantined. run_d2 exits non-zero for many reasons — gate refusal, missing
+    Uni3D assets, a crash in the h3d stage — and only the replay's own verdict may
+    stamp a session STRUCTURE QUARANTINE. A missing or stale report means the
+    verdict is unknown: that is a chain failure, retryable, never a quarantine."""
+    try:
+        if os.path.getmtime(report_path) < since:
+            return False
+        with open(report_path, encoding="utf-8") as handle:
+            return bool(json.load(handle).get("quarantined"))
+    except (OSError, ValueError):
+        return False
 
 
 def _upsert_label(session_id: str, goal: str, subtype: str, note: str) -> None:
@@ -350,11 +369,22 @@ def process_one(session_id: str, goal: str | None, subtype: str | None, no_vlm: 
             print("  run_d1 exited non-zero — evidence NOT regenerated; fix the "
                   "pixel pass (or the frames) and rerun")
             return {"session": session_id, "ok": False, "reason": "run_d1 failed"}
+        d2_started = time.time()
         d2 = _run("run_d2.py", jsonl, "--h3d", "--overwrite")
         if d2 != 0:
-            print("  run_d2 exited non-zero — STRUCTURE QUARANTINE (unrecoverable); skipping label")
-            _write_inspect(session_id, gate_ok=True, quarantined=True, verdict=None)
-            return {"session": session_id, "ok": False, "reason": "structure quarantine"}
+            replay = session_store.session_file(session_id, ".voxel_replay_report.json")
+            if _fresh_replay_quarantine(replay, d2_started):
+                print("  run_d2 replay verdict: STRUCTURE QUARANTINE (unexplained "
+                      "voxel divergence); skipping label")
+                _write_inspect(session_id, gate_ok=True, quarantined=True, verdict=None)
+                return {"session": session_id, "ok": False, "reason": "structure quarantine"}
+            # Same honesty rule as run_d1 above: a crash is not a verdict. No report
+            # is written — the session stays un-ready and retryable instead of being
+            # parked forever under a quarantine its own replay contradicts.
+            print("  run_d2 exited non-zero WITHOUT a fresh quarantine verdict — a "
+                  "crash, not a quarantine; evidence NOT regenerated. Rerun with the "
+                  "GPU free (traceback in capture/raw/child_logs/).")
+            return {"session": session_id, "ok": False, "reason": "run_d2 failed"}
 
     if evidence_only:
         if prior is not None and prior.get("verdict") is not None:

@@ -12,14 +12,14 @@ import os
 def newest_capture(raw_dir: str) -> str | None:
     """The newest raw B0 recording (`.jsonl`) in `raw_dir`, or None when there is none.
 
-    A capture is recognized by what it IS, not by what it isn't: `fabric-<stamp>.jsonl`
-    with no extra suffix dots and a `.manifest.json` sidecar (the mod writes both at
-    launch). The old blacklist of derived suffixes missed every OTHER .jsonl living in
-    the raw dir — rig_log, agent-* logs, gate_trace, caches — so a no-session
-    invocation of after_game once targeted "rig_log" as if it were a game (R-5,
-    2026-07-18 rig review).
+    A capture is recognized by what it IS, not by what it isn't: a `.jsonl` with no
+    extra suffix dots and a `.manifest.json` sidecar (the mod writes both at launch;
+    test rigs use the same shape under other names). The old blacklist of derived
+    suffixes missed every OTHER .jsonl living in the raw dir — rig_log, agent-* logs,
+    gate_trace, caches — so a no-session invocation of after_game once targeted
+    "rig_log" as if it were a game (R-5, 2026-07-18 rig review).
     """
-    jsonls = sorted(glob.glob(os.path.join(raw_dir, "fabric-*.jsonl")),
+    jsonls = sorted(glob.glob(os.path.join(raw_dir, "*.jsonl")),
                     key=os.path.getmtime)
     captures = [path for path in jsonls
                 if os.path.basename(path).count(".") == 1

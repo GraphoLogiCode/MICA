@@ -1,5 +1,5 @@
 """R-5 (2026-07-18 rig review): newest_capture must recognize captures by what
-they ARE (fabric-*.jsonl + manifest sidecar), not by a blacklist of derived
+they ARE (single-dot .jsonl + manifest sidecar), not by a blacklist of derived
 suffixes — the blacklist missed rig_log.jsonl and a no-session after_game
 invocation targeted "rig_log" as if it were a game."""
 import os
@@ -35,6 +35,15 @@ def test_a_capture_without_its_manifest_is_not_a_capture(tmp_path):
     _touch(tmp_path, "fabric-20260702-000000.jsonl", 200)   # newer, no manifest
     found = newest_capture(str(tmp_path))
     assert os.path.basename(found) == "fabric-20260701-000000.jsonl"
+
+
+def test_the_manifest_sidecar_defines_a_capture_not_the_name(tmp_path):
+    # test rigs record captures under non-fabric names with the same two-file
+    # shape (tests/test_run_live.py uses livetest-*) — the sidecar is the contract
+    _touch(tmp_path, "livetest-0001.jsonl", 100)
+    _touch(tmp_path, "livetest-0001.manifest.json", 100)
+    found = newest_capture(str(tmp_path))
+    assert found is not None and os.path.basename(found) == "livetest-0001.jsonl"
 
 
 def test_newest_wins_and_empty_dir_is_none(tmp_path):

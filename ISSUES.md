@@ -2563,3 +2563,20 @@ overwrote.
 - Open question carried: why the 07-18 agent never reached the build
   (pathfinding? terrain?) -- answerable from the NEXT occurrence's rotated
   status log; not worth reverse-engineering blind.
+
+## 2026-07-19 -- agent movement: dynamic band + stuck recovery (user direction)
+
+- [x] **Dynamic follow band** (follow_math.js, pure + tested; agent.js wired):
+  the fixed 4-8 band becomes moment-driven -- ENGAGED 3-6 for ~12 s after
+  voicing a suggestion (step in, make it social), BUSY 6-10 while the human
+  moves fast (>4 blocks/s), DEFAULT 4-8 otherwise; 2 s adoption hold against
+  boundary churn. Yield widening, workspace rule, receiving posture unchanged.
+- [x] **Stuck recovery** (the 07-18 root cause class): the far-follow goal was
+  set ONCE and never re-issued when the path died. Now progress is watched
+  (a block closer = progress); a 5 s stall re-issues the goal, the status
+  file's follow mode reads "recovering", and a 30 s stall >=20 blocks away is
+  said in chat (60 s gap, MICA_QUIET respected). Patrol may no longer claim
+  the tick beyond 20 blocks -- reaching the human outranks scanning.
+- Placement authority: NOT touched here -- the body's place machinery already
+  exists; what stops it is the pinned gate (theta_place 0.438 above validation
+  conf max 0.427 + the --place blockers). Decision pending with the user.

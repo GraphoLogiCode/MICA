@@ -14,7 +14,7 @@
 // multicast 224.0.2.60:4445); set MICA_PORT to skip discovery.
 //
 // AUTHORITY (D5, presence v1.1 "active shadowing", pinned 2026-07-04; §9 amendment
-// 2026-07-12): the agent TRACES the player. It follows at a 4-8 block band (paths
+// 2026-07-12): the agent TRACES the player. It follows at a dynamic band (paths
 // closer beyond 8, backs away inside 4), stays out of the human's workspace (backs
 // off the pipeline's focus block), looks where the pipeline says the human's
 // attention is, and may say ONE throttled advisory line about what the belief
@@ -51,6 +51,7 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const patrolMath = require('./patrol_math');   // coverage patrol v2: the pure math
 const placeMath = require('./placement_math'); // gate placement: the pure math
+const followMath = require('./follow_math');   // dynamic band + stuck recovery: the pure math
 const Vec3 = require('vec3');
 
 const HOST = process.env.MICA_HOST || '127.0.0.1';
@@ -87,7 +88,11 @@ const SCAN_RANGE_MAX = 96;         // rays stay cheap; beyond this the grid is t
 const SCAN_EVERY_MS = 250;         // 4 Hz, alongside the follow/gaze loops
 const EYE_HEIGHT = 1.62;
 
-// The shadowing band (D5 presence v1.1) and the advisory throttles.
+// The shadowing band (D5 presence v1.1) and the advisory throttles. Since
+// 2026-07-19 the LIVE band is dynamic (follow_math: step in after voicing,
+// give room to a fast-moving human); these constants are the DEFAULT band and
+// the fixed radii the subordinate postures (receiving, dismount, patrol spot
+// checks) still use.
 const FOLLOW_FAR = 8;          // beyond this, path toward the human
 const FOLLOW_NEAR = 4;         // inside this, back away (proximity, applied to self)
 const WORKSPACE_R = 3;         // never stand this close to the human's focus block
@@ -420,6 +425,7 @@ function start(port) {
   }
 
   let lastBackoffMs = 0;
+  const followState = followMath.newState();
   function followTick() {
     if (agentState !== 'present') return;
     if (gathering) return;   // a gather errand owns the pathfinder until it ends
@@ -434,6 +440,10 @@ function start(port) {
     const d = me.distanceTo(them);
     const focus = focusVec();
     const now = Date.now();
+    // The band for THIS moment (follow_math): closer right after voicing, wider
+    // while the human moves hard, the 4-8 default otherwise.
+    followMath.noteHumanPos(followState, [them.x, them.y, them.z], now);
+    const band = followMath.band(followState, now);
 
     // The workspace rule: never stand where the human is working.
     if (focus && me.distanceTo(focus) < WORKSPACE_R) {
@@ -473,12 +483,16 @@ function start(port) {
     // The D5 gate's YIELD widens the personal band for a few seconds: the agent
     // steps further out the moment the gate says the human is too close to its
     // would-be target. Same retreat leg, bigger radius, nothing new to test.
-    const nearBand = Date.now() < yieldUntilMs ? FOLLOW_NEAR + 4 : FOLLOW_NEAR;
+    const nearBand = now < yieldUntilMs ? band.near + 4 : band.near;
     // Coverage patrol slots in BELOW the vetoes above and ABOVE plain following:
     // it may claim the tick only while the human is idle or far, and never during
     // a gate YIELD. The instant the human acts nearby, the branches below resume.
+    // Capped at PATROL_MAX_D (2026-07-19): a human 100+ blocks away is a
+    // REACH-THEM problem, not a patrol opportunity — on 07-18 the agent spent a
+    // whole session near spawn while the human built far away.
     const humanIdle = liveStatus && liveStatus.current_behavior === 'idle';
-    if ((humanIdle || d > FOLLOW_FAR) && now >= yieldUntilMs
+    if ((humanIdle || d > band.far) && d <= followMath.PATROL_MAX_D
+        && now >= yieldUntilMs
         && d >= nearBand && patrolTick(me, them, focus, now)) {
       return;
     }
@@ -494,12 +508,22 @@ function start(port) {
       followMode = 'dismounting';
       return;
     }
-    if (d > FOLLOW_FAR && Date.now() >= yieldUntilMs) {
-      if (followMode !== 'following') {
-        setGoal(new goals.GoalFollow(human.entity, FOLLOW_NEAR + 1), true);
-        followMode = 'following';
+    if (d > band.far && now >= yieldUntilMs) {
+      // The 07-18 lesson: one pathfinder goal, set once, is a promise nothing
+      // checks. follow_math watches whether the distance actually shrinks;
+      // a dead path gets a fresh goal every few seconds, the status file shows
+      // "recovering", and a long stall is said out loud so the human knows
+      // their shadow is missing instead of silently mapping the wrong biome.
+      const step = followMath.farStep(followState, d, now);
+      if (step.issue) {
+        setGoal(new goals.GoalFollow(human.entity, band.near + 1), true);
+      }
+      followMode = step.recovering ? 'following (recovering — path failing?)' : 'following';
+      if (step.announce && process.env.MICA_QUIET !== '1') {
+        bot.chat(`I can't find a path to you — stuck about ${Math.round(d)} blocks away.`);
       }
     } else if (d < nearBand) {
+      followMath.farReset(followState);
       if (now - lastBackoffMs > 750) {
         const away = me.minus(them).normalize().scaled(nearBand + 1 - d);
         const spot = me.plus(away);
@@ -507,9 +531,12 @@ function start(port) {
         lastBackoffMs = now;
       }
       followMode = 'backing off';
-    } else if (followMode !== 'holding') {
-      setGoal(null);
-      followMode = 'holding';
+    } else {
+      followMath.farReset(followState);
+      if (followMode !== 'holding') {
+        setGoal(null);
+        followMode = 'holding';
+      }
     }
   }
 
@@ -576,6 +603,7 @@ function start(port) {
                        && gate.proposal_summary !== lastVoicedSummary))) {
       lastGateChatMs = now;
       lastVoicedSummary = gate.proposal_summary || null;
+      followMath.noteEngaged(followState, now);   // step in: it just spoke to them
       if (gate.state === 'suggest') {
         bot.chat(`Shall I help? I could add ${gate.proposal_summary || 'the next piece'}`
           + ` (conf ${Math.round((gate.conf || 0) * 100)}%)`);

@@ -2537,3 +2537,29 @@ file's own 2026-07-06 entry called the VLM "too noisy to arbitrate".
   (VLM sided with the builder 7, the matcher 4, a THIRD category 3, no
   verdict 1), 9 discarded on score/margin alone. The VLM's 7 builder-side
   votes changed nothing -- all 15 contested sessions have pairs withheld.
+
+## 2026-07-19 -- agent-scan diagnosis, status-file rotation, hotbar pre-registration
+
+Scan finding (user): 07-18 session scanned 0/216 build cells (agent never got
+within scan range -- scan cells x[57,215] vs build x[254,312]; it likely never
+reached the human from spawn). 07-19 morning session proves the mechanism:
+156/171 cells (91%), h3d cosine 0.916 vs exact. WHY the 07-18 agent got stuck
+is unrecoverable: its position log was a fixed-name file the next launch
+overwrote.
+
+- [x] **FIXED -- agent status file rotates like the scan** (agent.js
+  rotateAside for both sidecars; status rows now carry the sticky session tag)
+  and organize_raw adopts rotated status files into the session folder with the
+  same owner logic (row tag -> filename -> wallclock; stale-active sweep
+  included; tests). The next stuck-agent night is diagnosable.
+- [ ] **Hotbar + selection-moment features -- PRE-REGISTERED for the v2 heads
+  retrain** (D7 section 3, dated 2026-07-19 note): hotbar_dense (pooled item
+  embeddings + placeable count + presence flag) and held_changed (within-window
+  held-item switch flag). Decision rule pinned BEFORE training: with/without
+  comparison arm; adopt iff held-out pooled NLL not worse AND
+  pre-first-placement separation (accuracy + margin before each session's
+  first human PLACE) improves; negative result banked otherwise. Rides the
+  pinned larger-batch retrain milestone -- no early retrain.
+- Open question carried: why the 07-18 agent never reached the build
+  (pathfinding? terrain?) -- answerable from the NEXT occurrence's rotated
+  status log; not worth reverse-engineering blind.

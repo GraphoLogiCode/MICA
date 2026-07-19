@@ -212,7 +212,10 @@ function start(port) {
   // --- agent status file: the AGENT-side perspective for FlowViz -------------
   // One flushed JSON line per second into the capture folder; FlowViz tails it
   // next to the session logs and renders the agent panel from it. Truncated on
-  // every launch (the tailer treats the shrink as a rewrite and starts over).
+  // every launch (the tailer treats the shrink as a rewrite and starts over) —
+  // but rotated aside FIRST, like the scan file: the 2026-07-18 session's agent
+  // positions were unrecoverable because the next morning's launch overwrote
+  // them, and a stuck agent can only be diagnosed from this file.
   const statusPath = path.join(RAW_DIR, `agent-${NAME}.status.jsonl`);
   // The scan file: one line per 4 Hz sweep that saw something new. A previous
   // launch's scan is rotated aside — never deleted — so a finished session's scan
@@ -236,18 +239,25 @@ function start(port) {
     } catch (err) { /* unreadable: fall back to the mtime name */ }
     return null;
   }
-  try {
-    const prev = fs.statSync(scanPath);
-    if (prev.size > 0) {
-      const prevSession = lastTaggedSession(scanPath);
-      let rotated = scanPath.replace(/\.jsonl$/, `.${prevSession || Math.floor(prev.mtimeMs)}.jsonl`);
+  function rotateAside(file) {
+    // A previous launch's file is rotated aside — never deleted. The rotated
+    // name carries the SESSION ID when the rows are tagged with one; untagged
+    // files keep the mtime name. organize_raw adopts rotated files into their
+    // session's folder by the same evidence (row tag, filename, wallclock).
+    try {
+      const prev = fs.statSync(file);
+      if (prev.size === 0) return;
+      const prevSession = lastTaggedSession(file);
+      let rotated = file.replace(/\.jsonl$/, `.${prevSession || Math.floor(prev.mtimeMs)}.jsonl`);
       if (fs.existsSync(rotated)) {
         // Same session, second agent launch: keep both files apart.
-        rotated = scanPath.replace(/\.jsonl$/, `.${prevSession}.${Math.floor(prev.mtimeMs)}.jsonl`);
+        rotated = file.replace(/\.jsonl$/, `.${prevSession}.${Math.floor(prev.mtimeMs)}.jsonl`);
       }
-      fs.renameSync(scanPath, rotated);
-    }
-  } catch (err) { /* no previous scan */ }
+      fs.renameSync(file, rotated);
+    } catch (err) { /* no previous file */ }
+  }
+  rotateAside(scanPath);
+  rotateAside(statusPath);
   const scanSeen = new Set();     // "x,y,z" of every cell recorded this session
   let scanSessionId = null;       // the capture session the mind says is open —
                                   // sticky: kept after the pipeline goes quiet, so
@@ -292,6 +302,10 @@ function start(port) {
     const human = nearestHuman();
     const line = JSON.stringify({
       ts: Date.now(),
+      // The session tag (sticky, from the mind's live_status — same as the scan
+      // sweeps): it is what lets a rotated status file say which session it
+      // belongs to instead of leaving organize_raw to guess by clock.
+      session: scanSessionId,
       name: NAME,
       state: agentState,
       port,

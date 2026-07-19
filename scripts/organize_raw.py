@@ -131,10 +131,11 @@ def scan_owner(scan_path: str, starts: list[tuple[float, str]]) -> str | None:
 
 
 def _rotate_stale_active(root: str, apply: bool, plan: list[str]) -> None:
-    """An active scan file whose agent is long gone never got its launch-time
-    rotation. Rotate it here (session-tagged name when possible) so it becomes a
-    normal rotated file the mover below can place."""
-    for path in glob.glob(os.path.join(root, "agent-*.scan.jsonl")):
+    """An active scan or status file whose agent is long gone never got its
+    launch-time rotation. Rotate it here (session-tagged name when possible) so
+    it becomes a normal rotated file the mover below can place."""
+    for path in (glob.glob(os.path.join(root, "agent-*.scan.jsonl"))
+                 + glob.glob(os.path.join(root, "agent-*.status.jsonl"))):
         try:
             stat = os.stat(path)
         except OSError:
@@ -153,12 +154,16 @@ def _rotate_stale_active(root: str, apply: bool, plan: list[str]) -> None:
 
 def organize_scans(root: str = _RAW, apply: bool = False,
                    only_session: str | None = None) -> list[str]:
-    """Move every rotated agent scan into its owning session's folder."""
+    """Move every rotated agent sidecar (scan AND status file) into its owning
+    session's folder. Status files joined 2026-07-19: they rotate like scans at
+    agent launch (the 07-18 session's positions were lost to an overwrite) and
+    their rows carry the same session tag, so one owner logic serves both."""
     plan: list[str] = []
     if only_session is None:
         _rotate_stale_active(root, apply, plan)
     starts = _session_starts(root)
-    for path in sorted(glob.glob(os.path.join(root, "agent-*.scan.*.jsonl"))):
+    for path in sorted(glob.glob(os.path.join(root, "agent-*.scan.*.jsonl"))
+                       + glob.glob(os.path.join(root, "agent-*.status.*.jsonl"))):
         owner = scan_owner(path, starts)
         if owner is None:
             plan.append(f"skip    {os.path.basename(path)} (no session matches it)")

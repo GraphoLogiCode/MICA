@@ -70,6 +70,38 @@ def test_session_scoped_call_ignores_other_sessions(tmp_path):
     assert (tmp_path / "agent-X.scan.20.jsonl").exists()   # B's untouched
 
 
+def _status_row(ts_ms, session=None):
+    row = {"ts": ts_ms, "name": "MICA_AI", "state": "present", "pos": [0, 70, 0]}
+    if session:
+        row["session"] = session
+    return json.dumps(row) + "\n"
+
+
+def test_tagged_status_file_moves_to_its_session(tmp_path):
+    # 2026-07-19: the agent's position log rotates like the scan and is adopted
+    # the same way — the 07-18 stuck-agent night was undiagnosable because the
+    # next launch overwrote the only position record
+    _make_session(tmp_path, SID_A, 1_000_000)
+    status = tmp_path / "agent-X.status.9999.jsonl"
+    status.write_text(_status_row(2_000_000, session=SID_A), encoding="utf-8")
+    organize_raw.organize_scans(str(tmp_path), apply=True)
+    moved = tmp_path / "2026-07-01" / SID_A / "agent-X.status.9999.jsonl"
+    assert moved.exists() and not status.exists()
+
+
+def test_stale_active_status_file_is_rotated_then_adopted(tmp_path):
+    # an agent that crashed never rotated its status file; the stale sweep
+    # rotates it (session-tagged) so the mover can place it
+    _make_session(tmp_path, SID_A, 1_000_000)
+    status = tmp_path / "agent-X.status.jsonl"
+    status.write_text(_status_row(2_000_000, session=SID_A), encoding="utf-8")
+    os.utime(status, (1, 1))                                # long-gone agent
+    organize_raw.organize_scans(str(tmp_path), apply=True)
+    assert not status.exists()
+    adopted = list((tmp_path / "2026-07-01" / SID_A).glob("agent-X.status.*.jsonl"))
+    assert len(adopted) == 1
+
+
 def _trace_row(k, tick):
     return json.dumps({"k": k, "tick": tick, "chosen_state": "observe",
                        "candidate_state": "observe", "reason": "r",

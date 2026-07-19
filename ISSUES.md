@@ -2661,3 +2661,29 @@ ride the next cascade alongside contested-pairs v2). Vault note:
 - [x] Cascade: make step gains --real; comparison appended after
   contested-pairs. Fixed in passing: train_decoder referenced _ROOT without
   defining it (the 07-17 stage-pin edit -- would have crashed the next retrain).
+
+## 2026-07-19 night -- CASCADE A COMPLETE: both pre-registered experiments WIN
+
+Run at the user's word (10 agreed; before-models banked in pre_cascade_a; ledger
+stamped, 12,045-pair baseline). Two cascade-killing bugs found and fixed on the
+way -- both the SAME ghost: 210003's quarantined truncated bank entering through
+new doors (the real-NTP groups, then the contested eval set); both doors now
+honor the quarantine rule. OQ1 PASSES again on the fresh corpus; gate thetas
+STABLE at 0.338/0.438 (a good sign for the freeze's robustness).
+
+- [x] **Contested-pairs v2: CONTESTED-INCLUSION WINS** (all four criteria; three
+  improved outright): clean 0.000->0.333, all 0.182->0.273, pooled ECE
+  0.2584->0.2324, sustained-from 0.990->0.897. The 07-12 anti-association
+  failure did NOT reproduce on the repaired pipeline. Caveat: small eval
+  (11 sessions). Banked in the 07-12 note (Results v2).
+- [x] **Real-NTP pretraining WINS decisively**: real-holdout NLL 3.42->2.17
+  (-37%) and scripted holdout ALSO improved (1.7683->1.7246). The domain gap
+  was 1.25 nats -- real streams were the missing distribution, not noise.
+  Banked in the 07-19 note.
+- [ ] **DECISION (user): D3 amendment** -- include contested pairs (builder's
+  label as truth) in production heads training?
+- [ ] **DECISION (user): decoder recipe flip** -- adopt --real-pretrain into the
+  cascade's production decoder training? If yes: next cascade's full OQ1 must
+  pass on the new recipe before it ships live (two-step, per registration).
+- Watcher restarted post-cascade with MICA_CONSENT in its environment -- the
+  next session is the first with consent actually armed.

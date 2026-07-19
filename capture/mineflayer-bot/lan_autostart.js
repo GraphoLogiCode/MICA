@@ -287,9 +287,14 @@ function spawnRunLiveNow() {
   // default so an unattended rig keeps the demo posture; logged below so rig_log
   // records which authority every session ran under.
   const placeArgs = process.env.MICA_PLACE === '1' ? ['--place'] : [];
+  // MICA_CONSENT=1 arms the consent route (D5 §10, 2026-07-19): a chat "yes"
+  // after a voiced suggestion places that one block. Off by default so an
+  // unattended rig keeps the pure demo posture.
+  const consentArgs = process.env.MICA_CONSENT === '1' ? ['--consent-place'] : [];
   const liveLog = path.join(CHILD_LOGS, `runlive-${stamp()}.log`);
   runLive = spawn(PYTHON,
-    ['scripts/run_live.py', '--wait-session', '--heads', 'v1', ...placeArgs],
+    ['scripts/run_live.py', '--wait-session', '--heads', 'v1',
+     ...placeArgs, ...consentArgs],
     { cwd: MICA_ROOT, stdio: ['ignore', 'pipe', 'pipe'],
       env: { MICA_PIXELS: '1', MICA_H3D: '1', HF_HUB_OFFLINE: '1', ...process.env } });
   runLiveSession = null;

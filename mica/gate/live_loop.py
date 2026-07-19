@@ -45,6 +45,37 @@ def gate_ready() -> bool:
     return decoder_model.available() and os.path.exists(_GATE_META)
 
 
+CONSENT_FRESH_MS = 60000       # a "yes" licenses the proposal for this long
+CONSENT_ENTOMB_R = 1.5         # never place within this of the human's body
+
+
+def consent_veto(consent, consumed, target, player_pos, materials_block,
+                 now_s: float) -> str | None:
+    """Why a relayed consent may NOT become a directive right now — or None when
+    it may. The checks are the D5 §10 consent rules, in refusal-first order:
+    every returned string lands in the trace row, so a session's unhonored
+    yeses are diagnosable afterward."""
+    if not isinstance(consent, dict) or consent.get("ts") is None:
+        return "consent malformed"
+    if consent["ts"] in consumed:
+        return "consent already honored (one block per yes)"
+    if now_s * 1000 - consent["ts"] > CONSENT_FRESH_MS:
+        return "consent expired (the proposal may have moved on)"
+    if target is None or consent.get("cell") is None \
+            or tuple(consent["cell"]) != tuple(target):
+        return "consent names a different cell than the current proposal"
+    if player_pos is None:
+        return "human position unknown — not placing near a person I cannot see"
+    dx = target[0] + 0.5 - player_pos[0]
+    dy = target[1] + 0.5 - player_pos[1]
+    dz = target[2] + 0.5 - player_pos[2]
+    if (dx * dx + dy * dy + dz * dz) ** 0.5 <= CONSENT_ENTOMB_R:
+        return "target is inside the human's personal space"
+    if materials_block is not None and materials_block.get("feasible_prefix", 1) < 1:
+        return "no stock for the proposed block (the ask flow handles this)"
+    return None
+
+
 def proposal_summary(proposal, target, held_k: int, top_goal: str) -> str | None:
     """The advisory line's noun phrase — the body says "I could add {this}".
 
@@ -73,7 +104,7 @@ class LiveGateRunner:
     def __init__(self, trace_path: str, params, demo: bool = True,
                  preload: bool = False, materials_source=None,
                  session_id: str | None = None, gather: bool = False,
-                 place: bool = False):
+                 place: bool = False, consent_place: bool = False):
         if place:
             demo = False                          # --place IS the pin lift (§9 amendment)
         with open(_GATE_META, encoding="utf-8") as handle:
@@ -94,6 +125,14 @@ class LiveGateRunner:
             # pre-declared workflow, which would need its own pin.
             declared_place_enabled=False))
         self.place = place
+        # The consent route (D5 §10, answered 2026-07-19): an explicit chat "yes"
+        # relayed by the body licenses ONE placement of the current proposal,
+        # whatever the confidence. Separate arming from --place on purpose: this
+        # route never reads a threshold, so the confidence route's blockers do
+        # not apply — and it must not arm them either (the FSM stays demo).
+        self.consent_place = consent_place
+        self._consent_consumed: set = set()       # each consent ts licenses once
+        self._agent_consent: dict | None = None   # the newest relayed consent
         self.session_id = session_id              # keys the declared-target lookup
         self.params = params                      # MUST match the live belief's knobs
         self.hysteresis = commit.CommitHysteresis()
@@ -232,6 +271,9 @@ class LiveGateRunner:
                 # the first placement the agent has no stock for — a shortage
                 # SHRINKS the build; substitution needs an explicit chat grant.
                 if agent_snapshot is not None:
+                    # Consent rides the same snapshot (one file read per gate read).
+                    self._agent_consent = (agent_snapshot[3]
+                                           if len(agent_snapshot) > 3 else None)
                     inventory, grants = agent_snapshot[0], agent_snapshot[1]
                     mat_flags, missing, substituted = materials.feasibility_flags(
                         proposal.actions, inventory, grants)
@@ -288,6 +330,12 @@ class LiveGateRunner:
             return belief
         return predict(belief, (tick_now - snapshot) / 20.0, self.params)
 
+    def _authority(self) -> str:
+        # Every trace row declares which authority wrote it; the auditor judges the
+        # row by that declaration (demo commits nothing, consent commits only on
+        # route "consent", place runs the full §9 rules).
+        return "place" if self.place else ("consent" if self.consent_place else "demo")
+
     def _degraded(self, reason: str, status: dict) -> dict:
         """A read that could not gate still leaves its trace row (one row per read,
         D5 §7) — the log must show the gate was alive and observing, not absent."""
@@ -296,12 +344,12 @@ class LiveGateRunner:
                "K_commit": 0, "idle_state": None,
                "chosen_state": "observe", "candidate_state": "observe",
                "reason": reason,
-               "authority": "place" if self.place else "demo",
+               "authority": self._authority(),
                "committed_actions": []}
         self.trace.write(json.dumps(row) + "\n")
         self.trace.flush()
         return {"state": "observe", "reason": reason, "k_commit": 0,
-                "authority": "place" if self.place else "demo"}
+                "authority": self._authority()}
 
     def read(self, belief, fused, status: dict) -> dict:
         """One gate read. Returns the status-file "gate" block; flushes a trace row."""
@@ -339,6 +387,34 @@ class LiveGateRunner:
                 committed = [{"action": {"type": "place", "cell": list(target),
                                          "block": block_name},
                               "actor": "agent", "reversible": True, "route": route}]
+        # The consent route (D5 §10, 2026-07-19): the human's relayed "yes" licenses
+        # ONE placement of the current proposal, whatever the confidence — the
+        # license is their word, not the model's calibration. YIELD still emits
+        # nothing, a consumed consent never fires twice, and the veto's reason is
+        # written into the row so an unhonored yes is diagnosable afterward.
+        if (directive is None and self.consent_place
+                and self._agent_consent is not None
+                and decision.state.value != "yield"
+                and proposal is not None and target is not None
+                and isinstance(proposal.actions[0], Place)
+                and tuple(target) not in self.agent_cells):
+            veto = consent_veto(self._agent_consent, self._consent_consumed, target,
+                                gate_read.player_pos, self._materials_block,
+                                time.time())
+            if veto is None:
+                self._consent_consumed.add(self._agent_consent["ts"])
+                block_name = materials.normalize(proposal.actions[0].block)
+                self.agent_cells.add(tuple(target))
+                self.directives += 1
+                directive = {"id": f"{self._run_token}-{self.reads}",
+                             "cell": list(target),
+                             "block": block_name, "route": "consent"}
+                committed = [{"action": {"type": "place", "cell": list(target),
+                                         "block": block_name},
+                              "actor": "agent", "reversible": True,
+                              "route": "consent"}]
+            elif veto != "consent already honored (one block per yes)":
+                why_no_place = f"consent: {veto}"
         row = {"tick": fused.tick, "k": self.reads,
                "belief_snapshot_id": status.get("belief_snapshot_id"),
                "inputs_snapshot": {
@@ -370,7 +446,7 @@ class LiveGateRunner:
                                   else None),
                # The auditor judges each trace by its own recorded authority: demo
                # traces must show zero placements, place traces at most 1 per read.
-               "authority": "place" if self.place else "demo",
+               "authority": self._authority(),
                "committed_actions": committed}
         if why_no_place:
             row["reason"] += f" | no directive: {why_no_place}"
@@ -382,7 +458,7 @@ class LiveGateRunner:
                 "p_star": round(gate_read.p_top, 4),
                 # The body speaks up about shortages only when placement is armed —
                 # asking for materials the config would never let it place is noise.
-                "authority": "place" if self.place else "demo",
+                "authority": self._authority(),
                 "target_cell": list(target) if target else None,
                 "proposal_summary": summary,
                 "materials": self._materials_block,

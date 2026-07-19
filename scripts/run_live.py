@@ -559,14 +559,24 @@ def _live(host: str, port: int, session_arg: str | None = None) -> int:
             # sessions, 2026-07-13 — live behavior comes from inference alone).
             # Everything else — no flag, replays, counterfactual — stays demo.
             place = "--place" in sys.argv
+            # --consent-place arms the CONSENT route only (D5 §10, 2026-07-19):
+            # the human's chat "yes" after a voiced suggestion licenses ONE
+            # placement of that proposal, whatever the confidence. It does NOT
+            # lift the §9 pin — the FSM stays demo, theta_place stays untouched.
+            consent_place = "--consent-place" in sys.argv
             gate_runner = LiveGateRunner(f"{base}.gate_trace.jsonl", params,
                                          demo=not place, preload=True,
                                          session_id=session_id,
-                                         gather=gather, place=place)
+                                         gather=gather, place=place,
+                                         consent_place=consent_place)
             if place:
                 print("  D5 gate: LIVE — !! PLACEMENT ENABLED !! (§9 amendment: "
                       "confidence route only, 1 block per read, reversible only; "
                       "say 'stop' in chat to halt the agent)")
+            elif consent_place:
+                print("  D5 gate: LIVE — consent placement armed (D5 §10: your "
+                      "chat 'yes' after a suggestion places that ONE block; "
+                      "say 'stop' to halt the agent)")
             else:
                 print("  D5 gate: LIVE, decoder pre-warmed (demo config — observe/"
                       "suggest/preview only" + ("; GATHER enabled" if gather else ""))

@@ -259,7 +259,8 @@ def _trace_thetas(rows: list[dict], meta: dict) -> tuple[float, float, bool]:
 
 def _check_states_and_commits(audit: TraceAudit, rows: list[dict],
                               allow_place: bool, theta_place: float,
-                              declared_ok: bool | None) -> None:
+                              declared_ok: bool | None,
+                              allow_consent: bool = False) -> None:
     for row in rows:
         k = row.get("k")
         state = row.get("chosen_state")
@@ -267,17 +268,28 @@ def _check_states_and_commits(audit: TraceAudit, rows: list[dict],
         if state not in _LIVE_STATES:
             audit.fail(k, f"illegal state {state!r}")
         if state == "place_low_risk" and not allow_place:
+            # Consent authority never arms the staircase (D5 §10): this check is
+            # deliberately unchanged by allow_consent.
             audit.fail(k, "PLACE_LOW_RISK under the demo config -- the S9 pin failed")
         if row.get("committed_actions"):
             # Nothing may commit in the demo config at all; under the place config
             # (§9 amendment) a row commits at most ONE action, only in the placing
             # state, always reversible and traceable, with a route that holds up.
-            if not allow_place:
+            # Under consent authority (D5 §10, 2026-07-19) a commit is legal in
+            # any non-YIELD state, but ONLY on route "consent" — the human's own
+            # per-block word is the license the auditor holds it to.
+            consent_commit = all(a.get("route") == "consent"
+                                 for a in row["committed_actions"])
+            if not allow_place and not (allow_consent and consent_commit):
                 audit.fail(k, "committed_actions is non-empty under the demo config")
             if len(row["committed_actions"]) > 1:
                 audit.fail(k, f"{len(row['committed_actions'])} committed actions "
                            "in one read (the §9 amendment allows one block per read)")
-            if state != "place_low_risk":
+            if consent_commit and allow_consent:
+                if state == "yield":
+                    audit.fail(k, "a consent commit in YIELD (yield emits nothing, "
+                               "consent or not)")
+            elif state != "place_low_risk":
                 audit.fail(k, f"committed actions in state {state!r} "
                            "(only place_low_risk may commit)")
             if row.get("belief_snapshot_id") is None:
@@ -287,6 +299,11 @@ def _check_states_and_commits(audit: TraceAudit, rows: list[dict],
                 if not action.get("reversible", False):
                     audit.fail(k, "an irreversible action was committed (v1 bans this)")
                 route = action.get("route")
+                if route == "consent":
+                    if not allow_consent:
+                        audit.fail(k, "consent-route commit outside consent "
+                                   "authority (the chat channel was not armed)")
+                    continue
                 if not allow_place:
                     continue                 # already failed above; skip route noise
                 if route == "confidence":
@@ -506,14 +523,18 @@ def audit_trace(path: str, meta: dict, allow_place: bool) -> TraceAudit:
         # Each segment declares its own authority (§9 amendment): rows written
         # before the field exist are demo by definition. --allow-place still
         # overrides for counterfactual artifacts, where placing is simulated.
-        segment_place = allow_place or segment[0].get("authority") == "place"
+        # Consent authority (D5 §10) allows consent-route commits only — it
+        # never arms the staircase, so place_low_risk_enabled stays off for it.
+        authority = segment[0].get("authority")
+        segment_place = allow_place or authority == "place"
+        segment_consent = authority == "consent"
         fsm_cfg = dict(meta["fsm"])
         fsm_cfg["theta_suggest"] = theta_suggest
         fsm_cfg["theta_place"] = theta_place
         fsm_cfg["place_low_risk_enabled"] = segment_place
         _check_row_order(audit, segment, pooled)
         _check_states_and_commits(audit, segment, segment_place, theta_place,
-                                  declared_ok)
+                                  declared_ok, allow_consent=segment_consent)
         _check_snapshots(audit, segment, corrections)
         _check_staircase(audit, segment, meta["thresholds"]["c_min"])
         _check_fsm(audit, segment, fsm_cfg, meta["thresholds"]["m_consecutive"])

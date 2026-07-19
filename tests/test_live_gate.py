@@ -2,6 +2,7 @@
 cell tracking is actor-honest, and the Arm-0 neutral derivation does what its
 docstring says."""
 import json
+import time
 
 import pytest
 
@@ -219,6 +220,93 @@ def test_demo_reads_carry_no_directive_and_demo_authority(runner, tmp_path):
     rows = [json.loads(line) for line in
             (tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
     assert rows[-1]["authority"] == "demo"
+
+
+# --- the consent route (D5 §10, answered 2026-07-19) ----------------------------
+
+def _consent_gate(tmp_path, monkeypatch, consent_place, consent):
+    """A runner whose decoder always proposes oak_planks at origin+(1,0,1) and
+    whose agent snapshot relays the given consent — the D5 §10 wiring."""
+    from mica.contracts.b5 import ProposalChunk
+    from mica.decoder.grammar import Place
+    from mica.gate import live_loop
+    from mica.intent import heads_v1
+
+    proposal = ProposalChunk(
+        actions=(Place(dx=1, dy=0, dz=1, block="minecraft:oak_planks"),),
+        token_conf=(1.0,), rationale_goal="habitation")
+    monkeypatch.setattr(live_loop.decoder_model, "propose",
+                        lambda model, ctx, n: (proposal, None))
+    gate = LiveGateRunner(str(tmp_path / "trace.jsonl"), heads_v1.tracker_params(),
+                          session_id="test-session", consent_place=consent_place)
+    gate.model = object()
+    gate.origin = (0, 64, 0)
+    gate.materials_source = lambda: ({"oak_planks": 8}, {}, (18.0, 64.0, 6.0), consent)
+    return gate
+
+
+def test_consent_route_places_the_agreed_block_once(tmp_path, monkeypatch):
+    if not gate_ready():
+        pytest.skip("no decoder/gate freeze on this machine")
+    consent = {"ts": int(time.time() * 1000), "cell": [1, 64, 1]}
+    gate = _consent_gate(tmp_path, monkeypatch, consent_place=True, consent=consent)
+    try:
+        belief = _peaked_belief()             # conf BELOW theta_place on purpose:
+        blocks = [gate.read(belief, fused_record(), _safe_status())
+                  for _ in range(3)]          # the license is the yes, not the model
+        directives = [b["place"] for b in blocks if b["place"]]
+        assert len(directives) == 1           # one yes, one block, then consumed
+        assert directives[0]["route"] == "consent"
+        assert directives[0]["cell"] == [1, 64, 1]
+        gate.trace.flush()
+        rows = [json.loads(line) for line in
+                (tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert all(row["authority"] == "consent" for row in rows)
+        committed = [row for row in rows if row["committed_actions"]]
+        assert len(committed) == 1
+        assert committed[0]["chosen_state"] != "place_low_risk"   # staircase unarmed
+        action = committed[0]["committed_actions"][0]
+        assert action["route"] == "consent" and action["reversible"] is True
+    finally:
+        gate.close()
+
+
+def test_consent_is_ignored_without_the_flag(tmp_path, monkeypatch):
+    if not gate_ready():
+        pytest.skip("no decoder/gate freeze on this machine")
+    consent = {"ts": int(time.time() * 1000), "cell": [1, 64, 1]}
+    gate = _consent_gate(tmp_path, monkeypatch, consent_place=False, consent=consent)
+    try:
+        block = gate.read(_peaked_belief(), fused_record(), _safe_status())
+        assert block["place"] is None
+        gate.trace.flush()
+        rows = [json.loads(line) for line in
+                (tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert rows[-1]["authority"] == "demo"
+        assert rows[-1]["committed_actions"] == []
+    finally:
+        gate.close()
+
+
+def test_consent_veto_rules():
+    from mica.gate.live_loop import CONSENT_FRESH_MS, consent_veto
+
+    now = 1_000_000.0
+    ok = {"ts": now * 1000 - 100, "cell": [1, 64, 1]}
+    mats = {"feasible_prefix": 3, "missing": {}}
+    pos = (30.0, 64.0, 30.0)
+    assert consent_veto(ok, set(), (1, 64, 1), pos, mats, now) is None
+    assert "already honored" in consent_veto(ok, {ok["ts"]}, (1, 64, 1), pos, mats, now)
+    stale = {"ts": now * 1000 - CONSENT_FRESH_MS - 1, "cell": [1, 64, 1]}
+    assert "expired" in consent_veto(stale, set(), (1, 64, 1), pos, mats, now)
+    assert "different cell" in consent_veto(ok, set(), (2, 64, 1), pos, mats, now)
+    assert "cannot see" in consent_veto(ok, set(), (1, 64, 1), None, mats, now)
+    inside = (1.5, 64.5, 1.5)                 # standing exactly in the target cell
+    assert "personal space" in consent_veto(ok, set(), (1, 64, 1), inside, mats, now)
+    broke = {"feasible_prefix": 0, "missing": {"oak_planks": 1}}
+    assert "no stock" in consent_veto(ok, set(), (1, 64, 1), pos, broke, now)
+    assert "malformed" in consent_veto({"cell": [1, 64, 1]}, set(), (1, 64, 1),
+                                       pos, mats, now)
 
 
 def test_agent_events_feed_the_repropose_guard(runner):

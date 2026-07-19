@@ -331,6 +331,10 @@ function start(port) {
       // record of what actually landed (actor MICA_AI); this is the live readout.
       placing: placing ? { id: placing.id, cell: placing.cell, block: placing.block } : null,
       last_place: lastPlaceResult,
+      // The relayed consent (D5 §10): {ts, cell} until the mind honors it or it
+      // goes stale — kept a little past the mind's own 60 s freshness window.
+      consent: (pendingConsent && Date.now() - pendingConsent.ts <= 90000)
+        ? pendingConsent : null,
     }) + '\n';
     try { fs.appendFileSync(statusPath, line); } catch (err) { /* disk hiccup: skip a beat */ }
   }
@@ -586,6 +590,15 @@ function start(port) {
   // summary exists" would repeat the identical offer every 30 s. Re-voice only
   // when the offer itself changed (new block/cell), or on a state change.
   let lastVoicedSummary = null;
+  // The consent route (D5 §10, 2026-07-19): the body owns the voicing, so only
+  // it knows what was offered — it hears the human's "yes", remembers WHICH cell
+  // was on offer, and relays {ts, cell} in its status line for the mind to
+  // honor. One yes per voicing; a pending materials ask outranks (its yes
+  // answers the ask, exactly as before).
+  const CONSENT_WINDOW_MS = 60000;
+  let lastVoicedCell = null;
+  let lastVoicedMs = 0;
+  let pendingConsent = null;
   let yieldUntilMs = 0;
   function renderGate(gate) {
     if (!gate || !gate.state) return false;
@@ -603,6 +616,8 @@ function start(port) {
                        && gate.proposal_summary !== lastVoicedSummary))) {
       lastGateChatMs = now;
       lastVoicedSummary = gate.proposal_summary || null;
+      lastVoicedCell = gate.target_cell || null;   // what a "yes" would refer to
+      lastVoicedMs = now;
       followMath.noteEngaged(followState, now);   // step in: it just spoke to them
       if (gate.state === 'suggest') {
         bot.chat(`Shall I help? I could add ${gate.proposal_summary || 'the next piece'}`
@@ -631,12 +646,14 @@ function start(port) {
       // window, hysteresis); the body announces and runs ONE errand at a time.
       runGatherErrand(liveStatus, gate.gather);
       lastAction = 'gate: gather';
-    } else if (gate.state === 'place_low_risk' && gate.place && !placing && !gathering
+    } else if (gate.place && !placing && !gathering
                && !placeStopped && agentState === 'present'
                && !placedDirectives.has(gate.place.id)) {
-      // The mind authorized exactly ONE reversible block (§9 amendment: declared
-      // target or theta_place, staircase, materials, safe window, hysteresis all
-      // already cleared). The body walks, re-checks the live world, places once.
+      // The mind authorized exactly ONE reversible block. §9's rule is "the body
+      // places ONLY while this block is present (and its id is new)" — presence
+      // of the directive, not the FSM state, is the license, because the consent
+      // route (D5 §10, 2026-07-19) hands one down from SUGGEST/PREVIEW too.
+      // The body walks, re-checks the live world, places once.
       runPlaceErrand(gate.place);
       lastAction = 'gate: place';
     }
@@ -858,6 +875,19 @@ function start(port) {
       gatherStopped = false;
       placeStopped = false;
       bot.chat('Okay — I may gather or place again when the gate allows it.');
+      return;
+    }
+    // Placement consent (D5 §10): a "yes" while a voiced suggestion is fresh —
+    // and no materials ask is waiting (the ask's yes wins below, as always).
+    if (!pendingAsk && lastVoicedCell
+        && Date.now() - lastVoicedMs <= CONSENT_WINDOW_MS
+        && /\b(yes|yeah|okay|ok|sure|go ahead|do it|place it)\b/.test(said)
+        && !/\b(no|not|don'?t|dont|never)\b/.test(said)) {
+      pendingConsent = { ts: Date.now(), cell: lastVoicedCell };
+      lastVoicedCell = null;               // one yes per voicing
+      bot.chat("Thank you — I'll place that one block. Say stop to change your mind.");
+      lastAction = 'consent recorded';
+      writeStatus();
       return;
     }
     if (!pendingAsk) return;

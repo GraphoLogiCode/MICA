@@ -2580,3 +2580,33 @@ overwrote.
 - Placement authority: NOT touched here -- the body's place machinery already
   exists; what stops it is the pinned gate (theta_place 0.438 above validation
   conf max 0.427 + the --place blockers). Decision pending with the user.
+
+## 2026-07-19 -- CONSENT placement route (D5 s10 answered; user decision)
+
+The user chose the consent route over waiting for Stage-1 calibration: an
+explicit chat "yes" within 60 s of a voiced suggestion licenses EXACTLY ONE
+placement of that proposal, whatever the confidence -- the license is the
+human's word, so miscalibration cannot place a block.
+
+- [x] Vault: D5 s10's open consent question answered with a dated decision
+  note (mechanics, non-touches, arming, auditor rules).
+- [x] Mind: LiveGateRunner(consent_place=...) -- consent rides the agent
+  snapshot (materials.read_agent_snapshot 4th element); consent_veto (pure,
+  tested) enforces single-use, 60 s freshness, cell match, entomb guard
+  (1.5 blocks), stock; directive route "consent"; authority label "consent";
+  vetoed yeses land in the trace reason. theta_place, the staircase, YIELD,
+  A7 untouched.
+- [x] Body: hears yes/no (materials ask outranks; negations excluded), relays
+  consent {ts, cell} in its status line, executes any directive whose id is
+  new whatever the FSM state (s9's rule is directive-presence, not state).
+  One yes per voicing; stop still halts everything.
+- [x] Arming: run_live --consent-place; rig MICA_CONSENT=1 (off by default --
+  unattended rigs keep the pure demo posture).
+- [x] Auditor: consent authority accepts commits only on route consent, one
+  per read, reversible, never YIELD; the staircase check is unchanged (consent
+  never arms place_low_risk); consent-route commits outside consent authority
+  fail.
+- [ ] Acceptance signal follow-up: a consented placement is an AGENT block
+  (A7-filtered), so classify() reads the voiced suggestion as "ignored" today.
+  Add an "accepted_explicitly" tier (voiced -> consent -> directive executed)
+  to suggestion_acceptance -- the strongest acceptance datum there is.

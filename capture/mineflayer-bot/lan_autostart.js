@@ -106,6 +106,10 @@ function log(event, extra) {
 // One chain per session EVER: sessions whose chain already completed (this run or
 // any earlier one, read back from the log) are never re-processed.
 const processedSessions = new Set();
+// R-4: sessions whose chain STARTED but never logged chain_done — the retry sweep
+// below picks these up at startup, so a crashed chain is no longer parked forever.
+const stepStartedSessions = new Set();
+const stepFailCounts = {};
 function loadProcessedFromLog() {
   let text;
   try { text = fs.readFileSync(LOG_PATH, 'utf8'); } catch (err) { return; }
@@ -114,7 +118,55 @@ function loadProcessedFromLog() {
     try {
       const row = JSON.parse(line);
       if (row.event === 'chain_done' && row.session) processedSessions.add(row.session);
+      if (row.event === 'step_start' && row.session) stepStartedSessions.add(row.session);
+      if (row.event === 'step_fail' && row.session) {
+        stepFailCounts[row.session] = (stepFailCounts[row.session] || 0) + 1;
+      }
     } catch (err) { /* a torn line never blocks the watcher */ }
+  }
+}
+
+function datedSessionDir(root, sid) {
+  // The chain relocates captures to <root>/<YYYY-MM-DD>/<sid>/ — the date comes
+  // straight out of the session id.
+  const m = /^fabric-(\d{4})(\d{2})(\d{2})-/.exec(sid);
+  return m ? path.join(root, `${m[1]}-${m[2]}-${m[3]}`, sid) : null;
+}
+
+function sessionReport(sid) {
+  // Pre-chain flat sessions never enter the sweep (no step_start rows), so this
+  // only has to understand the dated shape.
+  for (const root of RAW_ROOTS) {
+    const dir = datedSessionDir(root, sid);
+    if (!dir) continue;
+    try {
+      return JSON.parse(fs.readFileSync(path.join(dir, 'session_report.json'), 'utf8'));
+    } catch (err) { /* not in this root */ }
+  }
+  return null;
+}
+
+// R-4: make the "a watcher restart may retry this session" promise real. At
+// startup, any session with a step_start but no chain_done gets its chain rerun
+// from the top (completed steps are cheap — after_game skips a recorded regen).
+// Honestly-parked sessions are left alone: a recorded quarantine or gate FAIL is
+// a verdict, not a crash, and a recorded matcher verdict means the work is done.
+// Repeated failures stop being retried after MAX_CHAIN_RETRIES — at that point a
+// human has to read the child_logs traceback, not the GPU.
+const MAX_CHAIN_RETRIES = 3;
+function retryUnfinishedChains() {
+  for (const sid of stepStartedSessions) {
+    if (processedSessions.has(sid)) continue;
+    const report = sessionReport(sid);
+    if (report && (report.structure_quarantined || report.gate_file_checks === 'FAIL'
+                   || report.verdict !== null)) continue;
+    if ((stepFailCounts[sid] || 0) >= MAX_CHAIN_RETRIES) {
+      log('chain_retry_exhausted', { session: sid,
+        detail: `${stepFailCounts[sid]} failed attempts — fix by hand (child_logs/ has the tracebacks)` });
+      continue;
+    }
+    log('chain_retry', { session: sid, detail: 'chain never completed — retrying from the top' });
+    runChain(sid);
   }
 }
 
@@ -315,12 +367,19 @@ function manifestFinalized(sid) {
   // The mod writes declared_event_count only when the session truly closes —
   // THE "session over" signal. A socket EOF is not one: exiting to the menu
   // closes the socket, but re-entering the world CONTINUES the same session.
+  // A live session's manifest sits flat in the root; an already-relocated one
+  // (the R-4 retry sweep meets these) sits in the dated dir — and relocation
+  // only ever happens after finalization, but read the count anyway.
   for (const root of RAW_ROOTS) {
-    try {
-      const meta = JSON.parse(fs.readFileSync(
-        path.join(root, `${sid}.manifest.json`), 'utf8'));
-      return Number(meta.declared_event_count ?? -1) >= 0;
-    } catch (err) { /* not in this root (or mid-write): try the next */ }
+    const dated = datedSessionDir(root, sid);
+    const candidates = [path.join(root, `${sid}.manifest.json`)]
+      .concat(dated ? [path.join(dated, `${sid}.manifest.json`)] : []);
+    for (const candidate of candidates) {
+      try {
+        const meta = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+        return Number(meta.declared_event_count ?? -1) >= 0;
+      } catch (err) { /* not here (or mid-write): try the next */ }
+    }
   }
   return false;
 }
@@ -424,6 +483,9 @@ lock.listen(LOCK_PORT, '127.0.0.1', () => {
   primeSeenManifests();
   log('watcher_start', {
     detail: `roots ${RAW_ROOTS.join(';')} — waiting for Minecraft (manifest) + Open to LAN (multicast)` });
+  // R-4 sweep BEFORE the eager pre-warm: a queued retry makes chainBusy() true,
+  // so the R-2 guard hands the GPU to the chain first and the mind spawns on drain.
+  retryUnfinishedChains();
 
   const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
   sock.on('message', (msg) => {

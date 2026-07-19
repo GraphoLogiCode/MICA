@@ -350,6 +350,15 @@ def process_one(session_id: str, goal: str | None, subtype: str | None, no_vlm: 
     jsonl = session_store.session_jsonl(session_id)
 
     prior = _prior_report(session_id)
+    if not redo_evidence and prior is not None and prior.get("structure_quarantined"):
+        # A recorded quarantine is the replay's own verdict (R-1) — redoing the
+        # ~5 min GPU regen blindly will reproduce it. Refuse fast (this also keeps
+        # the watcher's chain-retry sweep from burning GPU on parked sessions);
+        # --redo-evidence is the deliberate retry.
+        print("  prior report records a STRUCTURE QUARANTINE — refusing to redo the "
+              "GPU regen blindly; pass --redo-evidence to deliberately retry")
+        return {"session": session_id, "ok": False,
+                "reason": "structure quarantine (recorded)"}
     evidence_done = not redo_evidence and _evidence_regenerated(session_id)
     if evidence_done:
         print("  evidence already regenerated offline — skipping gate/run_d1/run_d2"
@@ -483,6 +492,28 @@ def process_batch(staged_path: str, no_vlm: bool) -> dict:
     return {"ok": not failures, "labeled": labeled, "refused": failures}
 
 
+def _surfaces_in_backlog(report: dict | None) -> bool:
+    """Should a with-evidence session still show up in the backlog/labeling tool?
+
+    - NO REPORT surfaces (fixed 2026-07-11): live-first sessions carry evidence
+      from their first minute, so "evidence but no report" just means the
+      post-session chain hasn't finished — or died partway. Hiding those made a
+      crashed chain's session invisible forever.
+    - AWAITING LABEL surfaces: the automation's evidence-only pass leaves the
+      label to the human.
+    - QUARANTINED / GATE-FAILED surfaces too, as long as it is unlabeled (R-4,
+      2026-07-18 review): these are read-only cards — the GUI's "can't label
+      this one" state existed but was unreachable, because exactly the sessions
+      it was written for were filtered out here. The human decides to skip them.
+    - Only a recorded VERDICT retires a session from the backlog (History owns it).
+    """
+    if report is None or report.get("awaiting_label"):
+        return True
+    return report.get("verdict") is None and (
+        bool(report.get("structure_quarantined"))
+        or report.get("gate_file_checks") == "FAIL")
+
+
 def _backlog_sessions() -> tuple[list[str], list[str]]:
     """(labeled-and-processable, needs-a-builder-label). A session is in the backlog
     if it has a raw jsonl but no evidence yet — "processed" means perception ran
@@ -496,18 +527,8 @@ def _backlog_sessions() -> tuple[list[str], list[str]]:
             continue                                   # derived sibling, not a capture
         session_id = name[:-len(".jsonl")]
         if os.path.exists(session_store.session_file(session_id, ".evidence2d.jsonl")):
-            # Perception already ran — but an automation-processed session may still
-            # be waiting for its builder label (evidence-only mode): surface it, and
-            # complete it if the label has arrived in labels.json meanwhile.
-            #
-            # NO REPORT AT ALL also surfaces (fixed 2026-07-11): live-first sessions
-            # carry evidence from their first minute (run_live writes it during
-            # play), so "evidence but no report" just means the post-session chain
-            # hasn't finished — or died partway. Hiding those made every fresh
-            # session invisible to the tool until its report landed, and a session
-            # whose chain crashed stayed invisible forever.
-            report = _prior_report(session_id)
-            if report is None or report.get("awaiting_label"):
+            # Perception already ran — surface or retire per _surfaces_in_backlog.
+            if _surfaces_in_backlog(_prior_report(session_id)):
                 (processable if session_id in labels else needs_label).append(session_id)
             continue
         (processable if session_id in labels else needs_label).append(session_id)

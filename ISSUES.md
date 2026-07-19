@@ -2466,14 +2466,22 @@ unrecoverable: child stdout/stderr goes to the watcher console only.
   chain-<sid>-<step>.log; runlive_exit and step_fail rig_log rows carry the
   child_log path on failure. Verified live: a watcher smoke-start captured
   run_live's real stderr to the file. Delete old logs freely; nothing reads them.
-- [ ] **R-4 MAJOR -- failed sessions are invisible**: a session whose chain failed
-  never resurfaces (watcher retry comment at lan_autostart.js:319 is dead code for
-  closed sessions; awaiting_label:false hides it from the labeling GUI's backlog,
-  after_game.py:479-482). Surface quarantined/failed reports as read-only inbox
-  cards + a startup chain sweep for sessions without chain_done.
-- [ ] **R-5 MAJOR -- newest_capture returns rig_log.jsonl** for any no---session
-  invocation (mica/capture/discovery.py:13,23-26): its suffix blacklist misses
-  rig_log/agent-*/gate_trace/arm2_cache. Match only fabric-*.jsonl with manifests.
+- [x] **R-4 FIXED (2026-07-19) -- failed sessions are visible and retried**:
+  (a) _surfaces_in_backlog (tested): unlabeled quarantined/gate-failed sessions
+  now surface as the GUI's read-only cards -- first real snapshot revealed 14
+  quarantined + 1 gate-failed historical sessions that were invisible; only a
+  recorded verdict retires a session. (b) Watcher startup sweep: step_start
+  without chain_done -> chain_retry (skips honestly-parked reports, gives up
+  after 3 step_fails with chain_retry_exhausted); manifestFinalized now also
+  reads the dated dir (a relocated session deferred as 'still open' in the first
+  live test). Proven end to end: the sweep retried 194844's chain and COMPLETED
+  the scan/report/readiness steps the 07-18 crash had aborted -> chain_done.
+  (c) process_one refuses fast on a recorded quarantine unless --redo-evidence
+  (closes R-8 too -- no more 5-min blind GPU regens on parked sessions).
+- [x] **R-5 FIXED (2026-07-19) -- newest_capture is a whitelist**: fabric-*.jsonl,
+  single-dot, manifest sidecar required (captures recognized by what they ARE);
+  the derived-suffix blacklist is gone. Tested against every .jsonl class that
+  bit a caller; live check returns a real capture, not rig_log.
 - [ ] **R-6 MINOR -- every voiced suggestion says the generic fallback**: 
   proposal_summary is gated on held_k >= 1 (live_loop.py:294-297) but SUGGEST is
   by construction the K_commit==0 state (fsm.py:205-208), so the body always says
@@ -2482,9 +2490,9 @@ unrecoverable: child stdout/stderr goes to the watcher console only.
 - [ ] **R-7 MINOR -- mixed-generation artifacts after a failed d2**: plain
   evidence2d was regenerated but evidence3d stayed the banked live copy until the
   manual rerun. Have the failure path rename/delete un-regenerated plain siblings.
-- [ ] **R-8 MINOR -- manual label on a quarantined session burns ~4.5 min of GPU**
-  before refusing (process_one lacks the batch path's up-front report check,
-  after_game.py:333-357 vs 420-422).
+- [x] **R-8 FIXED (2026-07-19, with R-4)**: process_one refuses a recorded
+  structure quarantine up front (seconds, clear message); --redo-evidence is the
+  deliberate retry.
 - [ ] **OPERATIONAL (runbook): give the rig a head start** -- start the watcher,
   wait for "models pre-warming" to finish (~3.5 min cold) BEFORE opening the world;
   tonight's entire live loss traces to a 92 s head start.

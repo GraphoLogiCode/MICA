@@ -9,18 +9,19 @@ import glob
 import os
 
 
-# Derived artifacts that sit next to captures with a .jsonl suffix — never captures.
-_DERIVED_SUFFIXES = (".evidence2d.jsonl", ".evidence3d.jsonl", ".fused.jsonl", ".belief.jsonl")
-
-
 def newest_capture(raw_dir: str) -> str | None:
-    """The newest raw B0 recording (`.jsonl`) in `raw_dir`, ignoring derived artifacts
-    (evidence, fused, belief logs — everything a pipeline run writes next to a capture).
+    """The newest raw B0 recording (`.jsonl`) in `raw_dir`, or None when there is none.
 
-    Returns the path, or None if there are no captures. A caller that also needs the
-    `.manifest.json` sidecar should check for it separately.
+    A capture is recognized by what it IS, not by what it isn't: `fabric-<stamp>.jsonl`
+    with no extra suffix dots and a `.manifest.json` sidecar (the mod writes both at
+    launch). The old blacklist of derived suffixes missed every OTHER .jsonl living in
+    the raw dir — rig_log, agent-* logs, gate_trace, caches — so a no-session
+    invocation of after_game once targeted "rig_log" as if it were a game (R-5,
+    2026-07-18 rig review).
     """
-    jsonls = sorted(glob.glob(os.path.join(raw_dir, "*.jsonl")), key=os.path.getmtime)
+    jsonls = sorted(glob.glob(os.path.join(raw_dir, "fabric-*.jsonl")),
+                    key=os.path.getmtime)
     captures = [path for path in jsonls
-                if not path.endswith(_DERIVED_SUFFIXES)]
+                if os.path.basename(path).count(".") == 1
+                and os.path.exists(path[:-len(".jsonl")] + ".manifest.json")]
     return captures[-1] if captures else None

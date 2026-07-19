@@ -138,11 +138,24 @@ def _write_real_groups(write_session) -> dict:
     excluded = _real_excluded()
     report = {"pretrain": 0, "holdout": 0, "excluded": sorted(excluded),
               "agent_events_dropped": 0, "out_of_range_dropped": 0,
-              "skipped_no_evidence": [], "quiet_stride": REAL_QUIET_STRIDE}
+              "skipped_no_evidence": [], "skipped_quarantined": [],
+              "skipped_inconsistent": [], "quiet_stride": REAL_QUIET_STRIDE}
     print("real-session NTP groups (pre-registered 2026-07-19; goal-free targets) ...")
     for session_id in real_ids:
         if session_id in excluded:
             continue
+        # The quarantine rule holds here like everywhere else: a structure-
+        # quarantined session's banked evidence is not trustworthy (210003's
+        # truncated bank crashed the first cascade run of this step).
+        report_path = os.path.join(session_store.session_dir(session_id),
+                                   "session_report.json")
+        try:
+            with open(report_path, encoding="utf-8") as handle:
+                if json.load(handle).get("structure_quarantined"):
+                    report["skipped_quarantined"].append(session_id)
+                    continue
+        except (OSError, ValueError):
+            pass
         b1_path = session_store.session_file(session_id, ".evidence2d.jsonl")
         b2_path = session_store.session_file(session_id, ".evidence3d.jsonl")
         if not (os.path.exists(b1_path) and os.path.exists(b2_path)):
@@ -154,7 +167,14 @@ def _write_real_groups(write_session) -> dict:
         report["agent_events_dropped"] += agent_dropped
         b1 = [json.loads(line) for line in open(b1_path, encoding="utf-8") if line.strip()]
         b2 = [json.loads(line) for line in open(b2_path, encoding="utf-8") if line.strip()]
-        fused = fuse_streams(b1, b2, session_id)
+        try:
+            fused = fuse_streams(b1, b2, session_id)
+        except ValueError as error:
+            # An inconsistent bank is a skip with its reason on record — one bad
+            # session must never kill a cascade (it did, 2026-07-19 first run).
+            report["skipped_inconsistent"].append(f"{session_id}: {error}")
+            print(f"  {session_id} SKIPPED (inconsistent bank): {str(error)[:90]}")
+            continue
         origin = context_builder.build_origin(fused)
         if origin is None or not placements:
             report["skipped_no_evidence"].append(session_id)

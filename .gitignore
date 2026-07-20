@@ -61,3 +61,7 @@ after_session_tool/staged_labels.json
 
 # decision records live in models/ but are hand-authored, not artifacts — keep them tracked
 !models/decoder_stage_pin.json
+report/tools/
+report/preview/
+report/*.log
+report/latex_out.txt

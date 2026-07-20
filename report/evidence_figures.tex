@@ -3,8 +3,11 @@
 % Each figure is self-contained; copy any single figure environment into the report.
 \documentclass[11pt]{article}
 \usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
 \usepackage{pgfplots}
-\pgfplotsset{compat=1.17}
+\pgfplotsset{compat=1.17,
+  every node near coord/.append style={/pgf/number format/fixed,
+    /pgf/number format/precision=3}}
 \usepackage{caption}
 \definecolor{micablue}{RGB}{46,110,180}
 \definecolor{micagray}{RGB}{140,140,140}
@@ -29,11 +32,10 @@
   xticklabels={Reactive\\(structure only), Implicit\\classifier, LLM\\reader, Belief\\tracker v0, Belief\\tracker v1},
   x tick label style={font=\small, align=center},
   nodes near coords, nodes near coords style={font=\small},
-  every axis plot/.append style={fill=micablue, draw=micablue!70!black},
   extra y ticks={0.2}, extra y tick labels={},
   extra tick style={grid=major, grid style={dashed, micagray}},
 ]
-\addplot coordinates {
+\addplot[fill=micablue, draw=micablue!70!black] coordinates {
   (Reactive, 0.042)
   (Implicit, 0.125)
   (LLM reader, 0.292)
@@ -127,7 +129,7 @@ evaluation set is small (11 sessions).}
   width=0.8\textwidth, height=6cm,
   xmin=0, xmax=520, ymin=0, ymax=1.05,
   xlabel={Scan sweep}, ylabel={Fraction of maximum},
-  legend style={font=\small, at={(0.97,0.25)}, anchor=east},
+  legend style={font=\small, at={(0.97,0.05)}, anchor=south east},
   grid=major, grid style={dotted, micagray!50},
 ]
 % coverage: built_seen / 171
@@ -158,7 +160,7 @@ same structural signal as the full ground truth. (Session
   width=0.92\textwidth, height=6.4cm,
   xmin=1900, xmax=11100, ymin=0, ymax=1.0,
   xlabel={Game tick}, ylabel={$P(\text{goal}=\textit{production})$},
-  legend style={font=\small, at={(0.03,0.97)}, anchor=north west},
+  scaled x ticks=false, xticklabel style={/pgf/number format/fixed},
   grid=major, grid style={dotted, micagray!50},
 ]
 \addplot[micablue, thick] coordinates {
@@ -180,11 +182,10 @@ same structural signal as the full ground truth. (Session
 \node[anchor=west, font=\footnotesize, color=micagray] at (axis cs:1950,0.155)
   {chance (5 goals)};
 \node[anchor=west, font=\footnotesize, color=micared, align=left]
-  at (axis cs:3900,0.95) {evidence starts here: the first\\ 46 placements were never seen};
-\draw[micared, ->, thick] (axis cs:3850,0.93) -- (axis cs:1990,0.32);
+  at (axis cs:3900,0.90) {evidence starts here: the first\\ 46 placements were never seen};
+\draw[micared, ->, thick] (axis cs:3850,0.88) -- (axis cs:1990,0.32);
 \node[anchor=west, font=\footnotesize, color=micagray, align=left]
-  at (axis cs:5950,0.06) {digression: builder wanders off\\ the farm; belief honestly follows};
-\legend{Belief in the true goal}
+  at (axis cs:7050,0.12) {digression: builder wanders off\\ the farm; belief honestly follows};
 \end{axis}
 \end{tikzpicture}
 \caption{\textbf{Case study: tracking a real intention through evidence, absence,
@@ -205,7 +206,7 @@ rest on the pooled evaluations of Fig.~1.}
 \begin{axis}[
   width=0.5\textwidth, height=5.4cm,
   ybar, bar width=26pt,
-  ymin=0, ymax=0.9,
+  ymin=0, ymax=0.9, enlarge x limits=0.35,
   ylabel={Token accuracy},
   symbolic x coords={4 actions ahead, chance},
   xtick=data, x tick label style={font=\small},

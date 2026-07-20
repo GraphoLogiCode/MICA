@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <style>
+    body{margin:0;background:#e9e7e2;-webkit-font-smoothing:antialiased;}
+    a{color:#2E6EB4;text-decoration:none;} a:hover{color:#24578C;}
+    sub{font-size:.68em;line-height:0;}
+  </style>
+</helmet>
+<div style="width:2094px;margin:26px auto;background:#ffffff;border:1px solid #e3e3e0;padding:30px 32px 24px;font-family:'KaTeX_Main',Georgia,'Times New Roman',serif;color:#161616;" data-screen-label="Fig 4 — labeling session">
+
+  <div style="position:relative;width:2030px;height:470px;margin:0 auto;">
+
+    <!-- labeling tool region -->
+    <div style="position:absolute;left:648px;top:60px;width:800px;height:360px;border:1.4px dashed #b9b9b9;border-radius:14px;background:rgba(140,140,140,.04);z-index:0;">
+      <div style="position:absolute;top:-11px;left:16px;background:#fff;padding:0 8px;font-style:italic;font-size:15px;color:#6e6e6e;">Labeling tool — one card per session, builder labels after play</div>
+    </div>
+
+    <!-- arrows -->
+    <svg style="position:absolute;left:0;top:0;width:2030px;height:470px;overflow:visible;z-index:1;pointer-events:none;" viewBox="0 0 2030 470">
+      <defs>
+        <marker id="ah4" markerWidth="9" markerHeight="9" refX="7.4" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 z" fill="#2b2b2b"></path></marker>
+        <marker id="ah4g" markerWidth="9" markerHeight="9" refX="7.4" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 z" fill="#3C915A"></path></marker>
+      </defs>
+      <g fill="none" stroke="#2b2b2b" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ah4)">
+        <path d="M254,280 L306,280"></path>
+        <path d="M596,280 L672,280"></path>
+        <path d="M1448,280 L1516,280"></path>
+        <path d="M1766,280 L1812,280"></path>
+      </g>
+    </svg>
+
+    <!-- captured session -->
+    <div style="position:absolute;left:24px;top:185px;width:230px;height:190px;box-sizing:border-box;border-radius:9px;border:1.8px solid #8c8c8c;background:#f0f0f0;color:#3f3f3f;padding:13px 14px;display:flex;flex-direction:column;gap:8px;z-index:2;">
+      <div style="font-style:italic;font-size:21px;color:#2b2b2b;">Captured session</div>
+      <div style="font-style:italic;font-size:16px;line-height:1.45;">proof-grade capture on disk — block events, POV, inputs</div>
+      <div style="margin-top:auto;font-style:italic;font-size:14px;color:#6e6e6e;">session ends → chain runs</div>
+    </div>
+
+    <!-- post-session chain -->
+    <div style="position:absolute;left:306px;top:180px;width:290px;height:200px;box-sizing:border-box;border-radius:9px;border:1.8px solid #2E6EB4;background:#f4f8fc;color:#1d4a7a;padding:13px 14px;display:flex;flex-direction:column;gap:8px;z-index:2;">
+      <div style="font-style:italic;font-size:21px;">Post-session chain</div>
+      <div style="font-style:italic;font-size:16px;line-height:1.45;">replay the session · regenerate evidence · matcher verdict per goal</div>
+      <div style="margin-top:auto;font-style:italic;font-size:14.5px;color:#B4463C;line-height:1.35;">quarantine only from the replay’s own fresh verdict — a crash never stamps a session</div>
+    </div>
+
+    <!-- session cards -->
+    <div style="position:absolute;left:680px;top:130px;width:172px;height:230px;box-sizing:border-box;border-radius:9px;border:1.8px solid #3C915A;background:#f4faf6;color:#1e5c38;padding:12px 13px;display:flex;flex-direction:column;gap:7px;z-index:2;">
+      <div style="font-style:italic;font-size:19px;">agreed</div>
+      <div style="font-style:italic;font-size:30px;">10</div>
+      <div style="font-style:italic;font-size:15px;line-height:1.4;">matcher and builder name the same goal</div>
+      <div style="margin-top:auto;font-style:italic;font-size:14px;color:#3d7a58;">→ training pairs</div>
+    </div>
+    <div style="position:absolute;left:872px;top:130px;width:172px;height:230px;box-sizing:border-box;border-radius:9px;border:2.4px solid #2E6EB4;background:#eef4fb;color:#1d4a7a;padding:12px 13px;display:flex;flex-direction:column;gap:7px;z-index:2;box-shadow:0 0 0 4px rgba(46,110,180,.10);">
+      <div style="font-style:italic;font-size:19px;">contested</div>
+      <div style="font-style:italic;font-size:30px;">18</div>
+      <div style="font-style:italic;font-size:15px;line-height:1.4;">“your word wins” — the builder’s label is truth</div>
+      <div style="margin-top:auto;font-style:italic;font-size:14px;color:#41689a;">→ training pairs (builder label)</div>
+    </div>
+    <div style="position:absolute;left:1064px;top:130px;width:172px;height:230px;box-sizing:border-box;border-radius:9px;border:1.8px solid #8c8c8c;background:#f0f0f0;color:#3f3f3f;padding:12px 13px;display:flex;flex-direction:column;gap:7px;z-index:2;">
+      <div style="font-style:italic;font-size:19px;color:#2b2b2b;">discarded</div>
+      <div style="font-style:italic;font-size:30px;color:#2b2b2b;">9</div>
+      <div style="font-style:italic;font-size:15px;line-height:1.4;">no goal to name — produces no belief pairs</div>
+      <div style="margin-top:auto;font-style:italic;font-size:14px;color:#6e6e6e;">→ decoder pretrain only (goal-free)</div>
+    </div>
+    <div style="position:absolute;left:1256px;top:130px;width:172px;height:230px;box-sizing:border-box;border-radius:9px;border:1.8px dashed #B4463C;background:#fff;color:#B4463C;padding:12px 13px;display:flex;flex-direction:column;gap:7px;z-index:2;">
+      <div style="font-style:italic;font-size:19px;">quarantined / gate-failed</div>
+      <div style="font-style:italic;font-size:15px;line-height:1.4;">visible as read-only cards — excluded consistently at every consumer</div>
+      <div style="margin-top:auto;font-style:italic;font-size:14px;">no pairs · no pretrain</div>
+    </div>
+    <div style="position:absolute;left:680px;top:378px;width:748px;text-align:center;font-style:italic;font-size:16px;color:#3f3f3f;z-index:2;">corpus: 37 labeled real sessions = 10 agreed · 18 contested · 9 discarded</div>
+
+    <!-- training corpus -->
+    <div style="position:absolute;left:1516px;top:135px;width:250px;height:290px;box-sizing:border-box;border-radius:9px;border:1.8px solid #3C915A;background:#f4faf6;color:#1e5c38;padding:13px 14px;display:flex;flex-direction:column;gap:9px;z-index:2;">
+      <div style="font-style:italic;font-size:21px;">Training corpus</div>
+      <div style="border-radius:7px;border:1.3px solid #a8d2b8;background:#fff;padding:8px 11px;font-style:italic;font-size:15px;line-height:1.4;">belief pairs — agreed + contested (builder’s label as truth)</div>
+      <div style="border-radius:7px;border:1.3px solid #a8d2b8;background:#fff;padding:8px 11px;font-style:italic;font-size:15px;line-height:1.4;">decoder real_pretrain — goal-free rows from real sessions</div>
+      <div style="border-radius:7px;border:1.3px solid #a8d2b8;background:#fff;padding:8px 11px;font-style:italic;font-size:15px;line-height:1.4;">real_holdout — 4 sessions pinned by id, eval-only</div>
+    </div>
+
+    <!-- retrain -->
+    <div style="position:absolute;left:1812px;top:130px;width:194px;height:300px;box-sizing:border-box;border-radius:9px;border:1.8px solid #2E6EB4;background:#f4f8fc;color:#1d4a7a;padding:13px 14px;display:flex;flex-direction:column;gap:9px;z-index:2;">
+      <div style="font-style:italic;font-size:21px;">Retrain</div>
+      <div style="font-style:italic;font-size:15.5px;line-height:1.4;">belief heads retrained · gate re-frozen</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <span style="border:1.3px dashed #B4463C;background:#fff;border-radius:6px;padding:5px 9px;font-style:italic;font-size:13.5px;color:#B4463C;">contested-pairs comparison</span>
+        <span style="border:1.3px dashed #B4463C;background:#fff;border-radius:6px;padding:5px 9px;font-style:italic;font-size:13.5px;color:#B4463C;">decoder real-NTP comparison</span>
+      </div>
+      <div style="margin-top:auto;font-style:italic;font-size:13.5px;color:#41689a;line-height:1.4;">standing monitors — pre-registered, verdict-banking, ship nothing alone</div>
+    </div>
+
+  </div>
+
+  <!-- CAPTION -->
+  <div style="width:1960px;margin:20px auto 0;font-size:17.5px;line-height:1.5;color:#1a1a1a;text-wrap:pretty;">
+    <b style="font-weight:600;">Figure 4.</b> The labeling session and training loop. When a session ends, the post-session chain replays it, regenerates evidence and produces a matcher verdict; only the replay’s own fresh verdict can quarantine a session. In the labeling tool the builder then reviews one card per session: <span style="font-style:italic;color:#1e5c38;">agreed</span> sessions yield training pairs directly, <span style="font-style:italic;color:#1d4a7a;">contested</span> sessions take the builder’s label as truth (“your word wins”), <span style="font-style:italic;">discarded</span> sessions produce no belief pairs but still feed goal-free decoder pretraining, and quarantined or gate-failed sessions stay visible as read-only cards, excluded everywhere. The corpus currently holds 37 labeled real sessions (10 / 18 / 9). Pairs and goal-free rows form the training corpus — with a four-session pinned holdout — and every retrain re-runs the pre-registered standing monitors before anything ships.
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: 2094, &quot;height&quot;: 790 }
+}"></script>
+</body>
+</html>

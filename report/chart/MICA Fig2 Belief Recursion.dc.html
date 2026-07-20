@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <style>
+    body{margin:0;background:#e9e7e2;-webkit-font-smoothing:antialiased;}
+    a{color:#2E6EB4;text-decoration:none;} a:hover{color:#24578C;}
+    sub{font-size:.68em;line-height:0;}
+  </style>
+</helmet>
+<div style="width:2094px;margin:26px auto;background:#ffffff;border:1px solid #e3e3e0;padding:30px 32px 24px;font-family:'KaTeX_Main',Georgia,'Times New Roman',serif;color:#161616;" data-screen-label="Fig 2 — belief recursion">
+
+  <div style="position:relative;width:1768px;height:380px;margin:0 auto;">
+
+    <svg style="position:absolute;left:0;top:0;width:1768px;height:380px;overflow:visible;z-index:1;pointer-events:none;" viewBox="0 0 1768 380">
+      <defs>
+        <marker id="ah2" markerWidth="9" markerHeight="9" refX="7.4" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 z" fill="#2b2b2b"></path></marker>
+        <marker id="ahb2" markerWidth="9" markerHeight="9" refX="7.4" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 z" fill="#2E6EB4"></path></marker>
+        <marker id="ahr2" markerWidth="9" markerHeight="9" refX="7.4" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L8,4 L0,8 z" fill="#B4463C"></path></marker>
+      </defs>
+      <g fill="none" stroke="#2b2b2b" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ah2)">
+        <path d="M228,188 L256,188"></path>
+        <path d="M408,162 L440,162 L440,188 L466,188"></path>
+        <path d="M588,188 L610,188 L610,162 L626,162"></path>
+        <path d="M790,162 L840,162 L840,188 L868,188"></path>
+        <path d="M990,188 L1006,188 L1006,196 L1022,196"></path>
+        <path d="M715,74 L715,112"></path>
+      </g>
+      <path d="M931,270 L931,332 L169,332 L169,272" fill="none" stroke="#2E6EB4" stroke-width="1.7" stroke-dasharray="5 4" stroke-linejoin="round" marker-end="url(#ahb2)"></path>
+    </svg>
+
+    <!-- retrained note + likelihood source -->
+    <div style="position:absolute;left:560px;top:10px;width:310px;text-align:center;font-style:italic;font-size:11px;color:#6e6e6e;z-index:2;line-height:1.2;">heads v1 — retrained on leak-free features + regenerated corpus</div>
+    <div style="position:absolute;left:632px;top:44px;width:166px;text-align:center;font-style:italic;font-size:11.5px;color:#1d4a7a;background:#f4f8fc;border:1.3px solid #9bb9dc;border-radius:6px;padding:5px 7px;z-index:2;line-height:1.2;">P(a<sub>k</sub> | e<sub>k</sub>, g, z) · observed a<sub>k</sub></div>
+
+    <!-- b_{k-1} -->
+    <div style="position:absolute;left:110px;top:88px;width:118px;text-align:center;font-style:italic;font-size:14px;color:#1d4a7a;z-index:2;">b<sub>k−1</sub></div>
+    <div style="position:absolute;left:110px;top:110px;width:118px;height:160px;box-sizing:border-box;border:1.4px solid #9bb9dc;border-radius:8px;background:#fff;padding:7px;display:flex;flex-direction:column;gap:5px;z-index:2;">
+      <div style="display:flex;gap:5px;justify-content:center;font-style:italic;font-size:9.5px;color:#41689a;"><span style="width:34px;text-align:center;">z=0</span><span style="width:34px;text-align:center;">z=1</span></div>
+      <div style="flex:1;display:grid;grid-template-columns:34px 34px;grid-auto-rows:1fr;gap:4px;justify-content:center;">
+        <div style="border-radius:3px;background:rgba(46,110,180,.30);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.22);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.26);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.34);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.32);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.24);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.20);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.28);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.30);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.22);border:1px solid rgba(46,110,180,.25);"></div>
+      </div>
+    </div>
+
+    <!-- predict -->
+    <div style="position:absolute;left:258px;top:118px;width:150px;height:88px;box-sizing:border-box;border-radius:9px;border:1.8px solid #2E6EB4;background:#eef4fb;color:#1d4a7a;padding:9px 10px;display:flex;flex-direction:column;gap:3px;z-index:2;">
+      <div style="font-style:italic;font-size:14px;">predict</div>
+      <div style="font-style:italic;font-size:11px;color:#41689a;line-height:1.25;">Δt-aware CTMC kernel</div>
+      <div style="font-style:italic;font-size:10px;color:#6d88ab;margin-top:auto;">drift between actions</div>
+    </div>
+
+    <!-- b_{k|k-1} -->
+    <div style="position:absolute;left:470px;top:88px;width:118px;text-align:center;font-style:italic;font-size:14px;color:#1d4a7a;z-index:2;">b<sub>k|k−1</sub></div>
+    <div style="position:absolute;left:470px;top:110px;width:118px;height:160px;box-sizing:border-box;border:1.4px solid #9bb9dc;border-radius:8px;background:#fff;padding:7px;display:flex;flex-direction:column;gap:5px;z-index:2;">
+      <div style="display:flex;gap:5px;justify-content:center;font-style:italic;font-size:9.5px;color:#41689a;"><span style="width:34px;text-align:center;">z=0</span><span style="width:34px;text-align:center;">z=1</span></div>
+      <div style="flex:1;display:grid;grid-template-columns:34px 34px;grid-auto-rows:1fr;gap:4px;justify-content:center;">
+        <div style="border-radius:3px;background:rgba(46,110,180,.20);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.18);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.30);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.46);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.50);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.30);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.22);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.20);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.16);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.14);border:1px solid rgba(46,110,180,.25);"></div>
+      </div>
+    </div>
+
+    <!-- correct -->
+    <div style="position:absolute;left:628px;top:118px;width:162px;height:88px;box-sizing:border-box;border-radius:9px;border:1.8px solid #2E6EB4;background:#eef4fb;color:#1d4a7a;padding:9px 10px;display:flex;flex-direction:column;gap:2px;z-index:2;">
+      <div style="font-style:italic;font-size:14px;">correct</div>
+      <div style="font-style:italic;font-size:11px;color:#41689a;line-height:1.2;">× likelihood · ε-floor · normalise</div>
+      <div style="font-style:italic;font-size:10px;color:#6d88ab;margin-top:auto;">on observed action</div>
+    </div>
+
+    <!-- runtime asserts -->
+    <div style="position:absolute;left:620px;top:214px;width:178px;box-sizing:border-box;border-radius:6px;border:1.2px solid #8c8c8c;background:#f0f0f0;color:#3f3f3f;padding:4px 8px;font-style:italic;font-size:10.5px;line-height:1.25;text-align:center;z-index:2;">runtime asserts: likelihood in range · belief &gt; 0</div>
+
+    <!-- b_k -->
+    <div style="position:absolute;left:872px;top:88px;width:118px;text-align:center;font-style:italic;font-size:14px;color:#1d4a7a;z-index:2;">b<sub>k</sub></div>
+    <div style="position:absolute;left:872px;top:110px;width:118px;height:160px;box-sizing:border-box;border:1.4px solid #9bb9dc;border-radius:8px;background:#fff;padding:7px;display:flex;flex-direction:column;gap:5px;z-index:2;">
+      <div style="display:flex;gap:5px;justify-content:center;font-style:italic;font-size:9.5px;color:#41689a;"><span style="width:34px;text-align:center;">z=0</span><span style="width:34px;text-align:center;">z=1</span></div>
+      <div style="flex:1;display:grid;grid-template-columns:34px 34px;grid-auto-rows:1fr;gap:4px;justify-content:center;">
+        <div style="border-radius:3px;background:rgba(46,110,180,.12);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.10);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.20);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.94);border:1px solid rgba(46,110,180,.4);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.32);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.16);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.12);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.10);border:1px solid rgba(46,110,180,.25);"></div>
+        <div style="border-radius:3px;background:rgba(46,110,180,.10);border:1px solid rgba(46,110,180,.25);"></div><div style="border-radius:3px;background:rgba(46,110,180,.08);border:1px solid rgba(46,110,180,.25);"></div>
+      </div>
+    </div>
+
+    <!-- readout -->
+    <div style="position:absolute;left:1024px;top:120px;width:232px;height:150px;box-sizing:border-box;border-radius:9px;border:1.6px solid #8c8c8c;background:#f0f0f0;color:#333;padding:11px 13px;display:flex;flex-direction:column;gap:6px;z-index:2;">
+      <div style="font-style:italic;font-size:13.5px;color:#2b2b2b;">read-out</div>
+      <div style="font-style:italic;font-size:12px;line-height:1.4;">top goal = argmax<sub>g</sub> Σ<sub>z</sub> b<sub>k</sub><br>p* = max b<sub>k</sub> · H(b<sub>k</sub>) entropy<br>P(z=1) deliberate mode</div>
+    </div>
+
+    <!-- calibration honesty (future) -->
+    <sc-if value="{{ showFuture }}" hint-placeholder-val="{{ true }}">
+      <svg style="position:absolute;left:0;top:0;width:1768px;height:380px;overflow:visible;z-index:2;pointer-events:none;" viewBox="0 0 1768 380">
+        <path d="M1140,270 L1140,288" fill="none" stroke="#B4463C" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#ahr2)"></path>
+      </svg>
+      <div style="position:absolute;left:1024px;top:292px;width:232px;box-sizing:border-box;border:1.5px dashed #B4463C;border-radius:8px;background:#fff;color:#B4463C;padding:7px 10px;z-index:2;">
+        <div style="font-style:italic;font-size:11.5px;">Stage-1 recalibration — future</div>
+        <div style="font-style:italic;font-size:10.5px;line-height:1.25;margin-top:2px;">p* not calibrated above 0.4 (inversion) → isotonic remap before any confidence-licensed placement</div>
+      </div>
+    </sc-if>
+
+    <!-- feedback label -->
+    <div style="position:absolute;left:330px;top:336px;width:440px;text-align:center;font-style:italic;font-size:12px;color:#41689a;z-index:2;">×K correction steps · advance tick&nbsp;&nbsp;k ← k+1</div>
+
+    <!-- notation key -->
+    <sc-if value="{{ showNotation }}" hint-placeholder-val="{{ true }}">
+      <div style="position:absolute;left:1300px;top:40px;width:468px;box-sizing:border-box;border:1px solid #d9d9d6;border-radius:8px;background:#fff;padding:12px 15px;z-index:2;">
+        <div style="font-style:italic;font-size:13.5px;color:#2b2b2b;margin-bottom:7px;">Notation</div>
+        <div style="display:flex;flex-direction:column;gap:4px;font-style:italic;font-size:12px;color:#333;line-height:1.35;">
+          <div>⊕ concat · MLP · cos = cosine similarity (s<sub>goal</sub>)</div>
+          <div>⋈ verified join (on tick + event_ids)</div>
+          <div>predict = Δt-aware CTMC transition kernel</div>
+          <div>correct = × likelihood, ε-floor, normalise · asserted at runtime</div>
+          <div>top goal = argmax · staircase = thresholded prefix-max</div>
+          <div>❄ frozen weights · dashed red = future</div>
+        </div>
+        <div style="border-top:1px dashed #ddddda;margin-top:9px;padding-top:8px;">
+          <div style="font-style:italic;font-size:12px;color:#B4463C;margin-bottom:4px;">One-way (no feedback)</div>
+          <div style="display:flex;flex-direction:column;gap:3px;font-style:italic;font-size:11.5px;color:#8f4a42;line-height:1.35;">
+            <div>① do(): drop the agent’s own blocks from evidence</div>
+            <div>② adapter A<sub>φ</sub> never consumes prior belief b<sub>k−1</sub></div>
+            <div>③ decoder / gate never feed back into the belief</div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+
+  <!-- CAPTION -->
+  <div style="width:1960px;margin:20px auto 0;font-size:16.5px;line-height:1.5;color:#1a1a1a;text-wrap:pretty;">
+    <b style="font-weight:600;">Figure 2.</b> The belief tracker’s predict→correct recursion. Between observed actions a Δt-aware CTMC kernel drifts the posterior b<sub>k−1</sub>(g, z); on each observed action the goal- and mode-conditioned likelihood P(a<sub>k</sub> | e<sub>k</sub>, g, z) multiplies in with an ε-floor and renormalisation, and the cycle advances the tick. Heads v1 are retrained on leak-free features and the regenerated evidence corpus; runtime asserts guard the likelihood range and belief positivity. Read-outs report the top goal, p*, entropy H(b<sub>k</sub>) and the deliberate-mode mass P(z=1). Belief confidence is not calibrated above 0.4 (an inversion), so confidence-licensed placement remains disabled until the Stage-1 recalibration (dashed, future); one-way constraints ①–③ mark where feedback is deliberately absent.
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: 2094, &quot;height&quot;: 660 },
+  &quot;showNotation&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Figure&quot; },
+  &quot;showFuture&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Figure&quot; }
+}">
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      showNotation: this.props.showNotation !== false,
+      showFuture: this.props.showFuture !== false
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,244 @@
+% MICA research poster — A0 landscape, three columns, paper-consistent palette
+% Compile: .\tools\tectonic.exe poster.tex
+\documentclass[final]{beamer}
+\usepackage[size=a0,orientation=landscape,scale=1.28]{beamerposter}
+\usepackage{amsmath}
+\usepackage{pgfplots}
+\usetikzlibrary{positioning}
+\pgfplotsset{compat=1.17,
+  every node near coord/.append style={/pgf/number format/fixed,
+    /pgf/number format/precision=3}}
+\usepackage{booktabs}
+
+\definecolor{micablue}{RGB}{46,110,180}
+\definecolor{micagray}{RGB}{140,140,140}
+\definecolor{micagreen}{RGB}{60,145,90}
+\definecolor{micared}{RGB}{180,70,60}
+\definecolor{paleblue}{RGB}{238,244,250}
+\definecolor{palegreen}{RGB}{238,247,240}
+\definecolor{palered}{RGB}{250,240,238}
+
+\setbeamercolor{block title}{fg=white,bg=micablue}
+\setbeamercolor{block body}{fg=black,bg=paleblue}
+\setbeamercolor{block title example}{fg=white,bg=micagreen}
+\setbeamercolor{block body example}{fg=black,bg=palegreen}
+\setbeamercolor{block title alerted}{fg=white,bg=micared}
+\setbeamercolor{block body alerted}{fg=black,bg=palered}
+\setbeamertemplate{navigation symbols}{}
+\setbeamerfont{block title}{size=\large,series=\bfseries}
+
+\newcommand{\stattile}[3]{%
+  \begin{minipage}[t][7.5cm][c]{#1}\centering
+    {\fontsize{64}{68}\selectfont\bfseries\color{micagreen}#2}\\[0.5em]
+    {\normalsize #3}
+  \end{minipage}}
+
+\title{MICA: Can an AI Understand What a Minecraft Builder Is Doing?}
+\author{Benjamin [surname] --- [institution]}
+
+\begin{document}
+\begin{frame}[t]
+
+% ------------------------------------------------------------------ header
+\begin{center}
+{\fontsize{80}{86}\selectfont\bfseries\color{micablue}
+  MICA: Can an AI Understand What a Minecraft Builder Is Doing?}\\[0.4em]
+{\Large \textbf{M}inecraft \textbf{I}ntention-\textbf{A}ware \textbf{C}ollaborative
+\textbf{A}gent \;\;·\;\; Benjamin [surname], [institution] \;\;·\;\;
+recognizing situations and intentions from raw observation --- no instructions,
+no privileged game state}
+\end{center}
+\vspace{0.6em}
+
+\begin{columns}[t]
+
+% ================================================================ LEFT
+\begin{column}{0.31\textwidth}
+
+\begin{block}{Why this matters}
+In structured work --- construction, warehouses, assembly --- an assistant that
+must be \textbf{told everything is bottlenecked by the telling}. The scarce
+resource is the human's attention. An assistant that \emph{infers} what you are
+doing removes that bottleneck.\\[0.5em]
+Assistance-game research formalized this (CIRL, 2016) and proved goal inference
+is the load-bearing part: a \textbf{confidently wrong helper is worse than
+none} (Watch-And-Help: 40\% of episodes, the helper undid the human's work).\\[0.5em]
+\textbf{The gap:} every prior assistant reads oracle game state.
+\textbf{Robots don't get oracle state.} MICA asks the question under robot
+conditions --- perception in, calibration measured, authority earned.
+\end{block}
+
+\begin{block}{The pipeline}
+\begin{center}
+\begin{tikzpicture}[
+  box/.style={draw=micablue, thick, rounded corners=6pt, fill=white,
+              align=center, minimum width=9.5cm, minimum height=2.2cm, font=\normalsize},
+  arr/.style={-stealth, very thick, micablue}]
+\node[box] (cap) {proof-grade capture\\ \scriptsize every block event (actor-attributed), POV, input state};
+\node[box, below=0.9cm of cap] (per) {frozen 2D + 3D perception\\ \scriptsize VPT behavior embedding · MineCLIP per-goal similarity · Uni3D shape};
+\node[box, below=0.9cm of per] (bel) {Bayesian belief $b(\text{goal},\text{mode})$\\ \scriptsize learned likelihood heads · do-operator: agent's own blocks are never evidence};
+\node[box, below=0.9cm of bel] (gate) {safety gate + FSM\\ \scriptsize observe $<$ suggest $<$ preview $<$ place · hysteresis · vetoes};
+\node[box, below=0.9cm of gate] (body) {embodied agent\\ \scriptsize follows, scans, voices offers · places ONE block only on your chat ``yes''};
+\draw[arr] (cap) -- (per); \draw[arr] (per) -- (bel);
+\draw[arr] (bel) -- (gate); \draw[arr] (gate) -- (body);
+\end{tikzpicture}
+\end{center}
+Every model is \textbf{frozen}: models built to make agents \emph{act} (VPT,
+MineCLIP) are read backwards here, as \emph{evidence about a human}.
+\end{block}
+
+\begin{block}{The dataset (all real, all mine)}
+\centering
+\begin{tabular}{lr}
+\toprule
+labeled real free-build sessions & \textbf{37} \\
+\quad matcher-agreed / contested / discarded & 10 / 18 / 9 \\
+never-seen evaluation sessions & \textbf{24} \\
+held-out real rows (anticipation eval) & \textbf{1{,}158} \\
+training pairs (one reproducible cascade) & 12{,}045 \\
+scripted known-truth corpus & 120 builds \\
+\bottomrule
+\end{tabular}\\[0.4em]
+\small One command regenerates every number on this poster from raw recordings.
+\end{block}
+
+\end{column}
+
+% ================================================================ MIDDLE
+\begin{column}{0.36\textwidth}
+
+\begin{exampleblock}{Finding 1 --- Intent inference is NECESSARY off-template}
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.92\linewidth, height=15cm,
+  ybar, bar width=52pt, ymin=0, ymax=0.46,
+  ylabel={final goal accuracy},
+  yticklabel style={/pgf/number format/fixed},
+  symbolic x coords={Reactive, Implicit, LLM, Belief v0, Belief v1},
+  xtick=data,
+  xticklabels={reactive\\(structure only), implicit\\classifier, LLM\\reader, belief\\tracker v0, belief\\tracker v1},
+  x tick label style={font=\small, align=center},
+  nodes near coords, nodes near coords style={font=\small\bfseries},
+  extra y ticks={0.2}, extra y tick labels={},
+  extra tick style={grid=major, grid style={dashed, micagray, ultra thick}},
+]
+\addplot[fill=micablue, draw=micablue!70!black] coordinates {
+  (Reactive, 0.042) (Implicit, 0.125) (LLM, 0.292)
+  (Belief v0, 0.250) (Belief v1, 0.375) };
+\node[anchor=west, font=\small\itshape, color=micagray]
+  at (axis cs:Reactive, 0.215) {chance (5 goals) = 0.20};
+\end{axis}
+\end{tikzpicture}
+\end{center}
+On \textbf{24 real sessions no model ever trained on}, the helper that skips
+intent inference collapses to \textbf{0.042} --- a \textbf{9$\times$} gap to
+the belief tracker. Exactly where builds stop matching templates, structure
+lookup stops working. \textit{Intent inference is what survives.}
+\end{exampleblock}
+
+\begin{exampleblock}{Finding 2 --- It anticipates your next moves, with minimal context}
+\begin{center}
+\stattile{0.29\linewidth}{71\%}{next action\\(real sessions)}\hfill
+\stattile{0.29\linewidth}{59\%}{\textbf{eight} actions ahead\\(real sessions)}\hfill
+\stattile{0.29\linewidth}{1.2\%}{chance level\\(87-token grammar)}
+\end{center}
+\vspace{0.3em}
+No instructions, no goal ever specified, frozen perception only. And the
+training data was free: \textbf{label-free pretraining on real sessions}
+closed a 1.25-nat domain gap ($-37\%$ prediction error) --- contested and
+discarded sessions included, because no label enters the sample.
+\end{exampleblock}
+
+\begin{exampleblock}{Finding 3 --- Understanding accumulates with observation}
+\begin{center}
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.9\linewidth, height=11cm,
+  xmin=0, xmax=520, ymin=0, ymax=1.05,
+  xtick={0,100,200,300,400,500},
+  xlabel={agent's scan sweep}, ylabel={fraction of maximum},
+  legend style={font=\normalsize, at={(0.97,0.06)}, anchor=south east},
+  grid=major, grid style={dotted, micagray!50},
+]
+\addplot[micagray, thick, mark=o] coordinates {
+  (100,0.094) (150,0.216) (200,0.327) (250,0.421) (300,0.509)
+  (350,0.655) (400,0.760) (450,0.854) (500,0.912) };
+\addplot[micagreen, ultra thick, mark=square*] coordinates {
+  (100,0.1165) (150,0.2241) (200,0.2927) (250,0.4775) (300,0.5097)
+  (350,0.7382) (400,0.7976) (450,0.8442) (500,0.9164) };
+\legend{build coverage, embedding agreement (cosine)}
+\end{axis}
+\end{tikzpicture}
+\end{center}
+As the embodied agent sees more of the build, the shape embedding of
+\emph{only what it has seen} converges to the full structure's
+(\textbf{0.92 cosine at 91\% coverage}).
+\end{exampleblock}
+
+\end{column}
+
+% ================================================================ RIGHT
+\begin{column}{0.31\textwidth}
+
+\begin{alertblock}{What failed --- and why that is the point}
+This project pre-registered its criteria and let them fire:
+\begin{itemize}
+  \item \textbf{Early recognition: unproven.} The pre-registered early
+    lock-in test fails for every arm ($p = 0.06$--$1.0$). Recognition is
+    mid-build, not early --- more sessions are the path.
+  \item \textbf{Confidence: not calibrated.} Above 0.4 stated confidence,
+    held-out reliability \emph{inverts}. Consequence taken seriously: the
+    confidence-licensed placement route is disabled by its own threshold.
+  \item \textbf{The belief is not prediction fuel.} Forcing the belief into
+    the action decoder changes nothing ($|\Delta| \le 0.001$ at every
+    horizon) --- its value is \emph{judgment} (what to say, when to act),
+    not forecasting.
+  \item \textbf{The agent has never placed a block.} Zero, ever ---
+    pinned. Assistance here is \emph{designed and safety-gated, never
+    evaluated}. A helper that declines to act without license is the
+    safety design working.
+  \item \textbf{One verdict was reversed} --- by finding a feature leak,
+    repairing the corpus, and re-running the pre-registered experiment
+    (it then won on every criterion). The retraction is on the record.
+\end{itemize}
+\end{alertblock}
+
+\begin{block}{The system improves lawfully with the right data}
+Two pre-registered experiments rode one retrain; both won; both adoptions
+were separate, dated decisions:
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+ & control & adopted \\
+\midrule
+real-session prediction error (NLL) & 3.42 & \textbf{2.17} \\
+clean-eval accuracy (+ contested labels) & 0.00 & \textbf{0.33} \\
+calibration error (ECE) & 0.258 & \textbf{0.232} \\
+earliness (sustained-from, lower=earlier) & 0.990 & \textbf{0.897} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{block}
+
+\begin{block}{What this means beyond Minecraft}
+The approach transfers to any domain with: \textbf{(1)} discrete observable
+actions, \textbf{(2)} goals legible from partial structure, \textbf{(3)}
+cheap dense observation of a shared workspace --- bricklaying, timber
+framing, warehouse picking, lab bench work.\\[0.5em]
+\textbf{Next:} recalibration (the gate to autonomy) · consent-route sessions
+with \emph{placement survival} as the outcome measure · more sessions for
+the earliness question.
+\end{block}
+
+\begin{block}{Take one sentence home}
+\centering\large\itshape
+``A helper that only pattern-matches the environment dies the moment work
+deviates from templates --- and real work always deviates.\\
+Inferring intention is what survives.''
+\end{block}
+
+\end{column}
+\end{columns}
+\end{frame}
+\end{document}

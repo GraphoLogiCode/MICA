@@ -2689,3 +2689,22 @@ STABLE at 0.338/0.438 (a good sign for the freeze's robustness).
   stay in the chain as standing monitors of both adopted rules.
 - Watcher restarted post-cascade with MICA_CONSENT in its environment -- the
   next session is the first with consent actually armed.
+
+## 2026-07-19 late -- belief-slot probe (POST-HOC, not pre-registered): no gain
+
+Question (report focus): does the inferred belief improve next-action
+prediction on real sessions? scripts/probe_belief_slot_gain.py (one command,
+banked at capture/raw/belief_slot_probe.json): forced intent slot belief vs
+zeros vs arm1, 1,158 real_holdout rows, horizons 1/2/4/8, both decoders.
+
+- Finding: NO belief gain at any horizon (|delta| <= 0.001) on either model.
+  The belief is computed from the same evidence the decoder reads --
+  conditionally redundant for action prediction. Its demonstrated value stays
+  situation classification (0.042 vs 0.375) + gate licensing, not prediction
+  fuel. Also: the pretrained decoder beats production at EVERY horizon on real
+  sessions (h1 0.710 vs 0.632; h4 0.586 vs 0.513).
+- Report consequence (user's focus question): primary thesis = anticipation
+  with minimal context; intent recognition claimed as classification, not as
+  prediction driver. Recorded in the Why draft (section 4b).
+- Future-work framing: making the belief matter for prediction = Stage-1
+  calibration + goal-conditioned proposal evaluation (the D9 arc).

@@ -4,6 +4,7 @@
 \documentclass[11pt]{article}
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath}
+\usepackage{booktabs}
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.17,
   every node near coord/.append style={/pgf/number format/fixed,
@@ -17,6 +18,50 @@
 \begin{document}
 
 \section*{MICA --- evidence figures}
+
+\subsection*{Evidence provenance: hand-rule, observation-learned, or both}
+
+Every number in this document was produced by one of three kinds of machinery,
+and each figure below carries its tag. \textbf{Hand-rule}: deterministic,
+hand-coded computation (the template matcher, the safety gate's rules, the
+Bayesian filter's update equations). \textbf{Observation}: components learned
+from watching --- the frozen foundation encoders (VPT, MineCLIP, Uni3D), the
+likelihood heads trained on recorded sessions, the action decoder trained on
+the human's actual next moves. \textbf{Both}: hand-specified structure carrying
+learned content.
+
+\begin{center}\small
+\begin{tabular}{llll}
+\toprule
+Figure / finding & hand-rule part & observation part & type \\
+\midrule
+Fig.~1 necessity & the reactive baseline itself; & likelihood heads over & \textbf{both}\\
+ & filter equations & frozen encoder features & \\
+Fig.~2 pretraining & target-building rules only & learning signal: the human's & \textbf{obs.}\\
+ & (mistake pairing, hygiene) & observed next actions & \\
+Fig.~3 contested & matcher groups the sessions & learned heads; builder's & \textbf{both}\\
+ & & label as supervision & \\
+Fig.~4 convergence & coverage bookkeeping & the frozen shape embedding & \textbf{obs.}\\
+Fig.~5 case study & filter dynamics & learned likelihoods & \textbf{both}\\
+Fig.~6 anticipation & the $\tau$-match metric & the decoder, end to end & \textbf{obs.}\\
+matcher 1.0 + boundary & entirely hand-rule & --- & \textbf{hand}\\
+gate / consent / A7 & entirely hand-rule (by design) & --- & \textbf{hand}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The separation is itself a finding. The \textbf{hand-rule components are where
+trust lives}: exact on known truth (matcher 1.0 on the scripted corpus),
+inspectable, and identical across experiment arms --- but they collapse
+off-template (0.042, Fig.~1), and that collapse is measured, not assumed.
+The \textbf{observation-learned components are where generalization lives}:
+they survive off-template (0.375), close domain gaps (Fig.~2), and improve
+lawfully with more observation (Figs.~2--4). MICA's architecture assigns roles
+accordingly --- \emph{hand rules govern safety and judgment} (the gate, consent,
+the do-operator), \emph{learned components govern perception and anticipation}
+--- and Fig.~1 is the head-to-head justification for that division: the
+hand-rule system alone dies exactly where real work lives, while the hybrid
+keeps working.
 
 % ---------------------------------------------------------------- Figure 1
 \begin{figure}[h]
@@ -51,7 +96,9 @@ on 24 real free-build sessions that no arm ever trained on. The reactive
 baseline---structure matching alone, the ``helper without intent inference''---%
 collapses to 0.042, while the belief tracker (v1) reaches 0.375, a $9\times$
 gap. Exactly where builds stop matching templates, structure alone stops
-working. (Four-arm comparison, exposure-verified splits, cascade of 2026-07-19.)}
+working. (Four-arm comparison, exposure-verified splits, cascade of 2026-07-19.)
+\textit{Evidence type: BOTH --- the baseline is the hand-rule system itself; the
+tracker is learned likelihoods inside a hand-specified filter.}}
 \end{figure}
 
 % ---------------------------------------------------------------- Figure 2
@@ -84,7 +131,9 @@ next-token stage on real sessions' action streams---usable from \emph{every}
 session, contested or discarded, because no goal label enters the sample---%
 recovers most of the gap ($-37\%$ on held-out real sessions) while slightly
 improving the scripted holdout. Pre-registered comparison, holdout sessions
-fixed by id before the run.}
+fixed by id before the run.
+\textit{Evidence type: OBSERVATION --- the learning signal is the human's actual
+next actions; hand rules only shape the targets.}}
 \end{figure}
 
 % ---------------------------------------------------------------- Figure 3
@@ -118,7 +167,9 @@ neither variant trained on: accuracy on both session groups, calibration
 which the top goal stays correct; lower = earlier). An identical experiment on
 2026-07-12 found the opposite; the reversal followed the repair of a feature
 leak and the evidence corpus, and is monitored at every retrain. Caveat: the
-evaluation set is small (11 sessions).}
+evaluation set is small (11 sessions).
+\textit{Evidence type: BOTH --- learned heads over observed features; the
+builder's own label as supervision; the hand-rule matcher only groups sessions.}}
 \end{figure}
 
 % ---------------------------------------------------------------- Figure 4
@@ -149,7 +200,9 @@ embodied agent's first-person raycast scan covers more of the human's build
 seen} converges to the embedding of the complete structure (green, cosine
 similarity $0.92$ at $91\%$ coverage). The agent's partial view carries the
 same structural signal as the full ground truth. (Session
-\texttt{fabric-20260719-052914}.)}
+\texttt{fabric-20260719-052914}.)
+\textit{Evidence type: OBSERVATION --- the claim is about the frozen learned
+embedding; only the coverage count is hand bookkeeping.}}
 \end{figure}
 
 % ---------------------------------------------------------------- Figure 5
@@ -196,7 +249,9 @@ starts at chance because the live pipeline attached late and missed the first
 dips when the builder wanders mid-session (an honest response to
 contradicting evidence, not noise), and re-locks as the farm takes shape,
 peaking at $P=0.84$. Illustrative single-session view; quantitative claims
-rest on the pooled evaluations of Fig.~1.}
+rest on the pooled evaluations of Fig.~1.
+\textit{Evidence type: BOTH --- hand-specified filter dynamics carrying learned
+likelihoods over live observed evidence.}}
 \end{figure}
 
 % ---------------------------------------------------------------- Figure 6
@@ -221,7 +276,9 @@ predicts the builder's action \emph{four steps ahead} with $74\%$ token
 accuracy on held-out sessions, against a token chance level of $1.2\%$
 (87-token vocabulary, $\tau$-matching: exact for symbolic tokens, $\pm2$ for
 coordinates). Understanding an intention here means correctly continuing the
-build several actions into the future.}
+build several actions into the future.
+\textit{Evidence type: OBSERVATION --- the decoder is learned end to end; only
+the $\tau$-match metric is hand-defined.}}
 \end{figure}
 
 \end{document}

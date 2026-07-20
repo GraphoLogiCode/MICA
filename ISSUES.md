@@ -2708,3 +2708,15 @@ zeros vs arm1, 1,158 real_holdout rows, horizons 1/2/4/8, both decoders.
   prediction driver. Recorded in the Why draft (section 4b).
 - Future-work framing: making the belief matter for prediction = Stage-1
   calibration + goal-conditioned proposal evaluation (the D9 arc).
+
+## 2026-07-19 late -- PIN (user decision): no assistance-efficacy claim
+
+The agent has placed ZERO blocks across all live sessions (demo/advisory
+configs; confidence route unreachable; consent armed only after the last
+session). Pinned in D9 s3b: the report describes assistance as designed,
+instrumented, and safety-gated -- NEVER evaluated. Future bar for any
+helpfulness claim: consent-route sessions with real placements + acceptance
+signal at meaningful n + placement SURVIVAL as the outcome measure (a block
+the agent placed remaining in the finished build -- measurable for free from
+the existing capture's block events, A7 attribution already separates actors).
+The sessions themselves stay fully valid for every non-assistance claim.

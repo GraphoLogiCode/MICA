@@ -1,0 +1,226 @@
+% MICA final report — evidence figures (all numbers from banked artifacts, 2026-07-19)
+% Compile: pdflatex evidence_figures.tex   (needs pgfplots >= 1.17)
+% Each figure is self-contained; copy any single figure environment into the report.
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\usepackage{caption}
+\definecolor{micablue}{RGB}{46,110,180}
+\definecolor{micagray}{RGB}{140,140,140}
+\definecolor{micagreen}{RGB}{60,145,90}
+\definecolor{micared}{RGB}{180,70,60}
+
+\begin{document}
+
+\section*{MICA --- evidence figures}
+
+% ---------------------------------------------------------------- Figure 1
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.85\textwidth, height=6.2cm,
+  ybar, bar width=17pt,
+  ymin=0, ymax=0.45,
+  ylabel={Final goal accuracy},
+  symbolic x coords={Reactive, Implicit, LLM reader, Belief v0, Belief v1},
+  xtick=data,
+  xticklabels={Reactive\\(structure only), Implicit\\classifier, LLM\\reader, Belief\\tracker v0, Belief\\tracker v1},
+  x tick label style={font=\small, align=center},
+  nodes near coords, nodes near coords style={font=\small},
+  every axis plot/.append style={fill=micablue, draw=micablue!70!black},
+  extra y ticks={0.2}, extra y tick labels={},
+  extra tick style={grid=major, grid style={dashed, micagray}},
+]
+\addplot coordinates {
+  (Reactive, 0.042)
+  (Implicit, 0.125)
+  (LLM reader, 0.292)
+  (Belief v0, 0.250)
+  (Belief v1, 0.375)
+};
+\node[anchor=west, font=\small\itshape, color=micagray]
+  at (axis cs:Reactive, 0.215) {chance (5 goals) = 0.20};
+\end{axis}
+\end{tikzpicture}
+\caption{\textbf{Intent inference is necessary off-template.} Final goal accuracy
+on 24 real free-build sessions that no arm ever trained on. The reactive
+baseline---structure matching alone, the ``helper without intent inference''---%
+collapses to 0.042, while the belief tracker (v1) reaches 0.375, a $9\times$
+gap. Exactly where builds stop matching templates, structure alone stops
+working. (Four-arm comparison, exposure-verified splits, cascade of 2026-07-19.)}
+\end{figure}
+
+% ---------------------------------------------------------------- Figure 2
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.62\textwidth, height=6cm,
+  ybar, bar width=20pt,
+  ymin=0, ymax=4.0,
+  ylabel={Next-token NLL (lower is better)},
+  symbolic x coords={Real sessions, Scripted holdout},
+  xtick=data,
+  xticklabels={Real sessions\\(held out), Scripted\\holdout},
+  x tick label style={font=\small, align=center},
+  legend style={font=\small, at={(0.5,1.02)}, anchor=south, legend columns=2},
+  nodes near coords, nodes near coords style={font=\footnotesize},
+]
+\addplot[fill=micagray, draw=micagray!70!black] coordinates {
+  (Real sessions, 3.4228) (Scripted holdout, 1.7683) };
+\addplot[fill=micagreen, draw=micagreen!60!black] coordinates {
+  (Real sessions, 2.1708) (Scripted holdout, 1.7246) };
+\legend{Scripted-only training, + real-session pretraining}
+\end{axis}
+\end{tikzpicture}
+\caption{\textbf{The decoder's domain gap, and closing it without labels.} The
+action decoder trained only on scripted builds is 1.25 nats worse at predicting
+a real human's next building action than a scripted one (gray). Pretraining its
+next-token stage on real sessions' action streams---usable from \emph{every}
+session, contested or discarded, because no goal label enters the sample---%
+recovers most of the gap ($-37\%$ on held-out real sessions) while slightly
+improving the scripted holdout. Pre-registered comparison, holdout sessions
+fixed by id before the run.}
+\end{figure}
+
+% ---------------------------------------------------------------- Figure 3
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.8\textwidth, height=6cm,
+  ybar, bar width=15pt,
+  ymin=0, ymax=1.1,
+  ylabel={Value},
+  symbolic x coords={CleanAcc, AllAcc, ECE, Sustained},
+  xtick=data,
+  xticklabels={Clean accuracy $\uparrow$, All-session accuracy $\uparrow$, Pooled ECE $\downarrow$, Sustained-from $\downarrow$},
+  x tick label style={font=\small, text width=2.6cm, align=center},
+  legend style={font=\small, at={(0.5,1.02)}, anchor=south, legend columns=2},
+  nodes near coords, nodes near coords style={font=\footnotesize},
+]
+\addplot[fill=micagray, draw=micagray!70!black] coordinates {
+  (CleanAcc, 0.000) (AllAcc, 0.182) (ECE, 0.2584) (Sustained, 0.990) };
+\addplot[fill=micablue, draw=micablue!70!black] coordinates {
+  (CleanAcc, 0.333) (AllAcc, 0.273) (ECE, 0.2324) (Sustained, 0.897) };
+\legend{Agreed-only training (old rule), + contested sessions (builder's label)}
+\end{axis}
+\end{tikzpicture}
+\caption{\textbf{The builder's word is good training data.} Training the
+likelihood heads on matcher-contested sessions---with the builder's own label
+as truth---improves every pre-registered criterion on a shared evaluation set
+neither variant trained on: accuracy on both session groups, calibration
+(ECE), and \emph{earliness} (sustained-from: the build-progress fraction from
+which the top goal stays correct; lower = earlier). An identical experiment on
+2026-07-12 found the opposite; the reversal followed the repair of a feature
+leak and the evidence corpus, and is monitored at every retrain. Caveat: the
+evaluation set is small (11 sessions).}
+\end{figure}
+
+% ---------------------------------------------------------------- Figure 4
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.8\textwidth, height=6cm,
+  xmin=0, xmax=520, ymin=0, ymax=1.05,
+  xlabel={Scan sweep}, ylabel={Fraction of maximum},
+  legend style={font=\small, at={(0.97,0.25)}, anchor=east},
+  grid=major, grid style={dotted, micagray!50},
+]
+% coverage: built_seen / 171
+\addplot[micagray, thick, mark=o, mark size=1.6pt] coordinates {
+  (100,0.094) (150,0.216) (200,0.327) (250,0.421) (300,0.509)
+  (350,0.655) (400,0.760) (450,0.854) (500,0.912) (505,0.912) };
+% cosine vs exact h3d
+\addplot[micagreen, very thick, mark=square*, mark size=1.6pt] coordinates {
+  (100,0.1165) (150,0.2241) (200,0.2927) (250,0.4775) (300,0.5097)
+  (350,0.7382) (400,0.7976) (450,0.8442) (500,0.9164) (505,0.9164) };
+\legend{Build coverage (cells seen / 171), Embedding agreement (cosine vs.\ full structure)}
+\end{axis}
+\end{tikzpicture}
+\caption{\textbf{Structural understanding accumulates with observation.} As the
+embodied agent's first-person raycast scan covers more of the human's build
+(gray), the 3D shape embedding computed from \emph{only what the agent has
+seen} converges to the embedding of the complete structure (green, cosine
+similarity $0.92$ at $91\%$ coverage). The agent's partial view carries the
+same structural signal as the full ground truth. (Session
+\texttt{fabric-20260719-052914}.)}
+\end{figure}
+
+% ---------------------------------------------------------------- Figure 5
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.92\textwidth, height=6.4cm,
+  xmin=1900, xmax=11100, ymin=0, ymax=1.0,
+  xlabel={Game tick}, ylabel={$P(\text{goal}=\textit{production})$},
+  legend style={font=\small, at={(0.03,0.97)}, anchor=north west},
+  grid=major, grid style={dotted, micagray!50},
+]
+\addplot[micablue, thick] coordinates {
+  (1952,0.201) (2052,0.231) (2156,0.244) (2249,0.236) (2418,0.260)
+  (2500,0.359) (2668,0.378) (2757,0.382) (2840,0.346) (2916,0.455)
+  (2999,0.597) (3116,0.623) (3207,0.675) (3315,0.659) (3395,0.573)
+  (3479,0.564) (3574,0.622) (3691,0.656) (3789,0.440) (4046,0.497)
+  (4168,0.530) (4243,0.596) (4406,0.534) (4516,0.518) (4656,0.266)
+  (4960,0.197) (5142,0.260) (5217,0.331) (5334,0.386) (5409,0.551)
+  (5556,0.588) (5704,0.687) (5875,0.748) (6021,0.314) (6222,0.185)
+  (6309,0.117) (6462,0.037) (6535,0.099) (6660,0.257) (6771,0.289)
+  (6858,0.386) (6965,0.309) (7066,0.298) (7243,0.397) (7335,0.557)
+  (7497,0.568) (7563,0.698) (7667,0.803) (7741,0.842) (7863,0.773)
+  (7964,0.765) (8084,0.759) (8243,0.714) (8357,0.727) (8450,0.807)
+  (8521,0.822) (8698,0.779) (8783,0.837) (8893,0.818) (9250,0.683)
+  (9345,0.835) (10159,0.532) (10991,0.461)
+};
+\addplot[micagray, dashed, domain=1900:11100] {0.2};
+\node[anchor=west, font=\footnotesize, color=micagray] at (axis cs:1950,0.155)
+  {chance (5 goals)};
+\node[anchor=west, font=\footnotesize, color=micared, align=left]
+  at (axis cs:3900,0.95) {evidence starts here: the first\\ 46 placements were never seen};
+\draw[micared, ->, thick] (axis cs:3850,0.93) -- (axis cs:1990,0.32);
+\node[anchor=west, font=\footnotesize, color=micagray, align=left]
+  at (axis cs:5950,0.06) {digression: builder wanders off\\ the farm; belief honestly follows};
+\legend{Belief in the true goal}
+\end{axis}
+\end{tikzpicture}
+\caption{\textbf{Case study: tracking a real intention through evidence, absence,
+and digression.} A live session in which the builder made a crop farm
+(their own post-session label; goal category \textit{production}). The belief
+starts at chance because the live pipeline attached late and missed the first
+46 placements---yet recovers the correct goal from the remaining evidence,
+dips when the builder wanders mid-session (an honest response to
+contradicting evidence, not noise), and re-locks as the farm takes shape,
+peaking at $P=0.84$. Illustrative single-session view; quantitative claims
+rest on the pooled evaluations of Fig.~1.}
+\end{figure}
+
+% ---------------------------------------------------------------- Figure 6
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.5\textwidth, height=5.4cm,
+  ybar, bar width=26pt,
+  ymin=0, ymax=0.9,
+  ylabel={Token accuracy},
+  symbolic x coords={4 actions ahead, chance},
+  xtick=data, x tick label style={font=\small},
+  nodes near coords, nodes near coords style={font=\small},
+]
+\addplot[fill=micagreen, draw=micagreen!60!black] coordinates {
+  (4 actions ahead, 0.7433) (chance, 0.0115) };
+\end{axis}
+\end{tikzpicture}
+\caption{\textbf{Anticipation, not just recognition.} The multi-token decoder
+predicts the builder's action \emph{four steps ahead} with $74\%$ token
+accuracy on held-out sessions, against a token chance level of $1.2\%$
+(87-token vocabulary, $\tau$-matching: exact for symbolic tokens, $\pm2$ for
+coordinates). Understanding an intention here means correctly continuing the
+build several actions into the future.}
+\end{figure}
+
+\end{document}

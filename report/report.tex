@@ -9,6 +9,9 @@
     /pgf/number format/precision=3}}
 \usepackage{booktabs}
 \usepackage{caption}
+\usepackage{graphicx}
+\usepackage{pifont}
+\usepackage{rotating}
 \definecolor{micablue}{RGB}{46,110,180}
 \definecolor{micagray}{RGB}{140,140,140}
 \definecolor{micagreen}{RGB}{60,145,90}
@@ -142,22 +145,115 @@ intent, with strictly one-way information flow --- decoder confidences never
 become evidence, because both source papers show those scores are not
 probabilities.
 
-\section{System in one page}
+\section{System architecture}
+\label{sec:system}
 
-A Fabric capture mod records proof-grade sessions (every block event with actor
-attribution, POV frames, input state). The pipeline fuses per-step 2D evidence
-(VPT behavior embedding; MineCLIP per-goal similarity; symbolic state routed
-losslessly around the encoders) with 3D evidence (per-goal template features
-and a frozen Uni3D shape embedding over the voxelized build) and feeds a
-recursive Bayesian filter over five goal categories $\times$ a behavioral mode
-axis. A commit gate and finite-state machine turn the belief into at most one
-of: observe, suggest, preview, yield; an embodied mineflayer agent follows the
-builder, voices suggestions, and may place a single block only on the human's
-explicit chat consent. Three honesty rails bind everything: the
-\emph{snapshot rule} (evidence strictly precedes the action it scores), the
-\emph{do-operator} (the agent's own blocks never enter evidence), and
-\emph{pre-registration} (evaluation criteria and decision rules frozen, dated,
-and banked before results exist).
+Figure~\ref{fig:arch} shows the pipeline as currently built (the diagram is the
+updated version of the project's design figure; every difference from the
+original design is itself a result of this project's audits).
+
+\begin{sidewaysfigure}[p]
+\centering
+\includegraphics[width=0.98\textheight]{architecture_nocap.png}
+\caption{\textbf{(a)} Overview of MICA. Each game tick, an observation packet
+splits into two perception streams --- \emph{2D behaviour} (frozen VPT and
+MineCLIP backbones, symbolic state, a rule-based macro-action) and \emph{3D
+spatial} (event-sourced voxel replay, per-goal template features, a frozen
+Uni3D embedding). A trained adapter $A_\varphi$ fuses the role-typed evidence;
+two likelihood heads produce the goal- and mode-conditioned action likelihood
+$P(a_k \mid e_k, g, z)$. The recursive \emph{belief tracker} (highlighted; the
+contribution) maintains $b_k(g,z)$ over five goals $\times$ two modes and is
+the only module swapped across the four experiment arms. Its control context
+conditions a multi-token action decoder (next-token stage pretrained
+label-free on real sessions) with a staircase commit gate, and a safety FSM
+(\textsc{yield} $<$ \textsc{observe} $<$ \textsc{suggest} $<$ \textsc{preview}
+$<$ \textsc{gather} $<$ \textsc{place\_low\_risk}) emits the assistance
+action. Colour encodes role: frozen pretrained (blue), trained (orange),
+rule-based/symbolic (grey). One-way constraints \ding{172}--\ding{174} mark
+deliberately absent feedback: the agent's own blocks never enter evidence (the
+do-operator), the adapter never consumes the prior belief, and the
+decoder/gate never feed back into the belief. Two updates from the audits of
+this project: the idle cue is a training \emph{target} only --- never a head
+feature --- after the leak audit; and placement is licensed either by
+confidence or by the human's explicit chat consent, one block per ``yes.''
+\textbf{(b)} The belief tracker's predict$\to$correct recursion: a
+$\Delta t$-aware transition kernel drifts the belief between actions; each
+observed action multiplies in the learned likelihood with an
+$\varepsilon$-floor and renormalization.}
+\label{fig:arch}
+\end{sidewaysfigure}
+
+A Fabric capture mod records proof-grade sessions (every block event with
+actor attribution, POV frames, input state). Three design properties matter
+for everything downstream. \emph{First, the belief is the only moving part}:
+the four experiment arms swap the intent module alone --- reactive, implicit
+classifier, LLM reader, belief tracker --- so any performance difference is
+attributable to the intent mechanism, not the harness. \emph{Second, evidence
+is causally clean}: the snapshot rule (evidence strictly precedes the action
+it scores), the do-operator (the agent's own blocks are interventions, never
+evidence), and the one-way constraints in Fig.~\ref{fig:arch} make the
+recorded traces intervention-grade --- the leak audit that reversed the
+contested-labels experiment (\S\ref{sec:failed}) is this discipline earning
+its keep. \emph{Third, authority is graded and earned}: the FSM's lattice
+moves downward instantly and upward only through hysteresis, and the terminal
+placement state is reachable only through calibrated confidence (currently,
+honestly, unreachable) or the human's per-block consent.
+
+\subsection{Compared with intention-recognition game systems}
+\label{sec:compare}
+
+MICA's nearest relatives are the assistance-game systems
+\cite{assistancezero,wah,nopa} and classical goal-recognition frameworks
+\cite{sips,clips}. The comparison is honest in both directions
+(Table~\ref{tab:compare}).
+
+\begin{table}[ht]
+\centering\small
+\begin{tabular}{p{0.47\textwidth}p{0.47\textwidth}}
+\toprule
+\textbf{Where this pipeline is stronger} & \textbf{Where game systems are stronger} \\
+\midrule
+Perception-in premise: no oracle scene graph, no ground-truth action labels
+--- the regime robots actually face &
+Absolute goal accuracy: with oracle symbolic state their inference is
+near-ceiling; MICA pays for perception (0.375 on never-seen sessions) \\
+\addlinespace
+Explicit, inspectable, \emph{swappable} belief --- the arm swap turns the
+belief itself into the measured variable &
+Belief-space planning: POMDP-style systems act to reduce their own
+uncertainty; MICA only filters and gates, never plans \\
+\addlinespace
+Calibration measured (reliability, pooled ECE) --- a quantity the lineage
+never reported &
+Open goal spaces: predicate- or reward-valued goals vs.\ MICA's fixed
+five-category taxonomy \\
+\addlinespace
+Causally clean traces: do-operator, snapshot rule, no belief feedback ---
+intervention-grade data &
+Task-outcome evaluation: trained assistance policies show speedup /
+completion gains; MICA has placed zero blocks (pinned) and claims no
+efficacy \\
+\addlinespace
+Consent-gated authority: safety does not depend on the belief being right &
+Demonstrated early recognition --- typically in domains engineered for goal
+separability \cite{grdsurvey}; MICA's earliness is honestly unproven \\
+\addlinespace
+Label-free improvement paths: real-session pretraining, contested labels
+under the builder's word --- grows from disputed and unlabeled data &
+Simulator oracles are cheap; MICA's proof-grade capture rig is real
+instrumentation work \\
+\bottomrule
+\end{tabular}
+\caption{An honest two-way comparison with intention-recognition game
+systems. The columns are complementary rather than competing: MICA trades
+absolute inference accuracy and planning depth for deployability of premise,
+auditability, and safety that does not presume a correct belief.}
+\label{tab:compare}
+\end{table}
+
+The trade is deliberate: game systems optimize assistance quality inside a
+simulator's epistemically generous regime; this project optimizes for the
+question ``what would it take to trust this outside one.''
 
 \section{Results: five claims, each with its data}
 

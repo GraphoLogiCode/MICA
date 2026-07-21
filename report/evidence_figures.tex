@@ -19,49 +19,48 @@
 
 \section*{MICA --- evidence figures}
 
-\subsection*{Evidence provenance: hand-rule, observation-learned, or both}
+\subsection*{Where each number comes from: written rules, learning, or both}
 
-Every number in this document was produced by one of three kinds of machinery,
-and each figure below carries its tag. \textbf{Hand-rule}: deterministic,
-hand-coded computation (the template matcher, the safety gate's rules, the
-Bayesian filter's update equations). \textbf{Observation}: components learned
-from watching --- the frozen foundation encoders (VPT, MineCLIP, Uni3D), the
-likelihood heads trained on recorded sessions, the action decoder trained on
-the human's actual next moves. \textbf{Both}: hand-specified structure carrying
-learned content.
+The system has two kinds of parts, and every figure below says which kind
+produced its numbers. \textbf{Hand-rule} parts are instructions a person wrote
+down --- ``compare the structure to these known shapes,'' ``only act when
+confidence passes this bar.'' They do exactly what they were told, nothing
+more. \textbf{Observation} parts were not told what to do --- they learned by
+watching recordings of a person building, the way one learns a coworker's
+habits. \textbf{Both} means a hand-written frame carrying learned content
+inside it.
 
 \begin{center}\small
 \begin{tabular}{llll}
 \toprule
-Figure / finding & hand-rule part & observation part & type \\
+Figure / finding & written-rule part & learned-by-watching part & type \\
 \midrule
-Fig.~1 necessity & the reactive baseline itself; & likelihood heads over & \textbf{both}\\
- & filter equations & frozen encoder features & \\
-Fig.~2 pretraining & target-building rules only & learning signal: the human's & \textbf{obs.}\\
- & (mistake pairing, hygiene) & observed next actions & \\
-Fig.~3 contested & matcher groups the sessions & learned heads; builder's & \textbf{both}\\
- & & label as supervision & \\
-Fig.~4 convergence & coverage bookkeeping & the frozen shape embedding & \textbf{obs.}\\
-Fig.~5 case study & filter dynamics & learned likelihoods & \textbf{both}\\
-Fig.~6 anticipation & the $\tau$-match metric & the decoder, end to end & \textbf{obs.}\\
-matcher 1.0 + boundary & entirely hand-rule & --- & \textbf{hand}\\
-gate / consent / A7 & entirely hand-rule (by design) & --- & \textbf{hand}\\
+Fig.~1 five designs & the losing baseline itself; & the winner's evidence & \textbf{both}\\
+ & the belief-update rule & judgments & \\
+Fig.~2 real pretraining & data tidying only & teacher: the human's own & \textbf{obs.}\\
+ & & recorded next actions & \\
+Fig.~3 disputed labels & sorting sessions into groups & the trained parts; builder's & \textbf{both}\\
+ & & label as the answer key & \\
+Fig.~4 seeing = knowing & counting seen blocks & the shape representation & \textbf{obs.}\\
+Fig.~5 live case study & the belief-update rule & evidence judgments & \textbf{both}\\
+Fig.~6 move prediction & the definition of ``right'' & the predictor, end to end & \textbf{obs.}\\
+structure checker & entirely written rules & --- & \textbf{hand}\\
+safety gate + consent & entirely written rules (by design) & --- & \textbf{hand}\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The separation is itself a finding. The \textbf{hand-rule components are where
-trust lives}: exact on known truth (matcher 1.0 on the scripted corpus),
-inspectable, and identical across experiment arms --- but they collapse
-off-template (0.042, Fig.~1), and that collapse is measured, not assumed.
-The \textbf{observation-learned components are where generalization lives}:
-they survive off-template (0.375), close domain gaps (Fig.~2), and improve
-lawfully with more observation (Figs.~2--4). MICA's architecture assigns roles
-accordingly --- \emph{hand rules govern safety and judgment} (the gate, consent,
-the do-operator), \emph{learned components govern perception and anticipation}
---- and Fig.~1 is the head-to-head justification for that division: the
-hand-rule system alone dies exactly where real work lives, while the hybrid
-keeps working.
+The split is itself a result. \textbf{Hand-rule parts are where trust lives}:
+on builds they were written for, they are perfect (the matcher scores 1.0 on
+the known-truth corpus) and anyone can read exactly why they answered as they
+did --- but on new, unplanned builds they collapse (0.042 in Fig.~1), and that
+collapse was measured, not assumed. \textbf{Learned parts are where
+flexibility lives}: they keep working on builds nothing was written for
+(0.375), and they get better simply by watching more (Figs.~2--4). The system
+divides the work accordingly: \emph{written rules decide when it is safe to
+speak or act}; \emph{learned parts do the watching and predicting}. Fig.~1 is
+the head-to-head test behind that division --- rules alone fail exactly where
+real, unscripted work happens.
 
 % ---------------------------------------------------------------- Figure 1
 \begin{figure}[h]
@@ -91,14 +90,19 @@ keeps working.
   at (axis cs:Reactive, 0.215) {chance (5 goals) = 0.20};
 \end{axis}
 \end{tikzpicture}
-\caption{\textbf{Intent inference is necessary off-template.} Final goal accuracy
-on 24 real free-build sessions that no arm ever trained on. The reactive
-baseline---structure matching alone, the ``helper without intent inference''---%
-collapses to 0.042, while the belief tracker (v1) reaches 0.375, a $9\times$
-gap. Exactly where builds stop matching templates, structure alone stops
-working. (Four-arm comparison, exposure-verified splits, cascade of 2026-07-19.)
-\textit{Evidence type: BOTH --- the baseline is the hand-rule system itself; the
-tracker is learned likelihoods inside a hand-specified filter.}}
+\caption{\textbf{Guessing what the builder is making: five designs, one test.}
+Five different designs watched the same 24 recorded building sessions --- real,
+free-form builds that none of them had ever seen --- and each had to name what
+the builder was making, out of five goal categories. Each bar is the share of
+sessions a design got right; random guessing scores 0.20 (dashed line). The
+leftmost design, which skips inference and just compares the structure to a
+library of known shapes, scores 0.042 --- \emph{worse} than guessing, because
+free-form builds match nothing in its library. The design that maintains a
+running belief about the builder's intention scores 0.375, nine times better.
+Since every design saw identical input, the gap can only come from the
+inference itself. (Comparison run of 2026-07-19.)
+\textit{Source: BOTH --- the failing baseline is the hand-written rules; the
+winner is learned content inside a hand-written frame.}}
 \end{figure}
 
 % ---------------------------------------------------------------- Figure 2
@@ -109,7 +113,7 @@ tracker is learned likelihoods inside a hand-specified filter.}}
   width=0.62\textwidth, height=6cm,
   ybar, bar width=20pt,
   ymin=0, ymax=4.0,
-  ylabel={Next-token NLL (lower is better)},
+  ylabel={Prediction error (lower is better)},
   symbolic x coords={Real sessions, Scripted holdout},
   xtick=data,
   xticklabels={Real sessions\\(held out), Scripted\\holdout},
@@ -124,16 +128,19 @@ tracker is learned likelihoods inside a hand-specified filter.}}
 \legend{Scripted-only training, + real-session pretraining}
 \end{axis}
 \end{tikzpicture}
-\caption{\textbf{The decoder's domain gap, and closing it without labels.} The
-action decoder trained only on scripted builds is 1.25 nats worse at predicting
-a real human's next building action than a scripted one (gray). Pretraining its
-next-token stage on real sessions' action streams---usable from \emph{every}
-session, contested or discarded, because no goal label enters the sample---%
-recovers most of the gap ($-37\%$ on held-out real sessions) while slightly
-improving the scripted holdout. Pre-registered comparison, holdout sessions
-fixed by id before the run.
-\textit{Evidence type: OBSERVATION --- the learning signal is the human's actual
-next actions; hand rules only shape the targets.}}
+\caption{\textbf{A model trained on artificial data struggles with real people
+--- until it watches real recordings.} The bars show prediction error when the
+model guesses a builder's next action: lower is better. Trained only on
+computer-generated example builds (gray), the model predicts artificial
+builders well but real ones poorly --- the left gray bar towers over the right
+one. Letting it first watch real recorded sessions (green) cuts its error on
+real builders by 37\%. The key: this extra training needed \emph{no labels at
+all}. The model simply watches a recording and tries to guess each next
+action, so even sessions whose goal was disputed or unidentifiable could
+teach it --- a doubtful label cannot mislead training that uses no labels.
+The test sessions were locked in before the experiment ran.
+\textit{Source: OBSERVATION --- the teacher is the human's own recorded next
+actions; written rules only tidy the data.}}
 \end{figure}
 
 % ---------------------------------------------------------------- Figure 3
@@ -159,17 +166,22 @@ next actions; hand rules only shape the targets.}}
 \legend{Agreed-only training (old rule), + contested sessions (builder's label)}
 \end{axis}
 \end{tikzpicture}
-\caption{\textbf{The builder's word is good training data.} Training the
-likelihood heads on matcher-contested sessions---with the builder's own label
-as truth---improves every pre-registered criterion on a shared evaluation set
-neither variant trained on: accuracy on both session groups, calibration
-(ECE), and \emph{earliness} (sustained-from: the build-progress fraction from
-which the top goal stays correct; lower = earlier). An identical experiment on
-2026-07-12 found the opposite; the reversal followed the repair of a feature
-leak and the evidence corpus, and is monitored at every retrain. Caveat: the
-evaluation set is small (11 sessions).
-\textit{Evidence type: BOTH --- learned heads over observed features; the
-builder's own label as supervision; the hand-rule matcher only groups sessions.}}
+\caption{\textbf{When human and machine disagree about a session, trust the
+human.} Some recorded sessions are ``disputed'': the builder said one goal,
+the automatic checker said another. The old rule kept such sessions out of
+training (gray bars); the new rule trains on them, taking the builder's word
+as the truth (blue bars). On a shared test set that neither version trained
+on, keeping them improved all four measures: accuracy on cleanly-labeled
+sessions (0 $\to$ 0.33), accuracy across all sessions, how well stated
+confidence matches actual correctness (ECE; lower is better), and how early
+in a build the right answer locks in and stays (lower is earlier). Honesty
+note: an earlier run of this same experiment found the \emph{opposite}; a
+data flaw was found and repaired, the experiment was rerun, and the reversal
+is on the record --- and re-checked at every retrain. The test set is small
+(11 sessions).
+\textit{Source: BOTH --- learned parts trained on watched sessions, with the
+builder's own label as the answer key; written rules only sort sessions into
+groups.}}
 \end{figure}
 
 % ---------------------------------------------------------------- Figure 4
@@ -191,18 +203,21 @@ builder's own label as supervision; the hand-rule matcher only groups sessions.}
 \addplot[micagreen, very thick, mark=square*, mark size=1.6pt] coordinates {
   (100,0.1165) (150,0.2241) (200,0.2927) (250,0.4775) (300,0.5097)
   (350,0.7382) (400,0.7976) (450,0.8442) (500,0.9164) (505,0.9164) };
-\legend{Build coverage (cells seen / 171), Embedding agreement (cosine vs.\ full structure)}
+\legend{Share of the build seen so far, Picture match: partial vs.\ complete structure}
 \end{axis}
 \end{tikzpicture}
-\caption{\textbf{Structural understanding accumulates with observation.} As the
-embodied agent's first-person raycast scan covers more of the human's build
-(gray), the 3D shape embedding computed from \emph{only what the agent has
-seen} converges to the embedding of the complete structure (green, cosine
-similarity $0.92$ at $91\%$ coverage). The agent's partial view carries the
-same structural signal as the full ground truth. (Session
+\caption{\textbf{Seeing more means understanding more.} The agent walks around
+the builder's work and can only know what its own eyes have passed over ---
+it gets no map, no list of blocks from the game. The gray line shows how much
+of the build it has seen so far; the green line asks a harder question: does
+its mental picture of the \emph{partial} structure it has seen match the
+picture it would form of the \emph{complete} structure? (1.0 = identical.)
+The two lines rise together: by the time 91\% of the build has been seen, the
+match reaches 0.92 --- watching most of the build is nearly as good as seeing
+all of it. (One fully instrumented session,
 \texttt{fabric-20260719-052914}.)
-\textit{Evidence type: OBSERVATION --- the claim is about the frozen learned
-embedding; only the coverage count is hand bookkeeping.}}
+\textit{Source: OBSERVATION --- the ``mental picture'' is a learned shape
+representation; only the seen-block counting is hand bookkeeping.}}
 \end{figure}
 
 % ---------------------------------------------------------------- Figure 5
@@ -212,7 +227,8 @@ embedding; only the coverage count is hand bookkeeping.}}
 \begin{axis}[
   width=0.92\textwidth, height=6.4cm,
   xmin=1900, xmax=11100, ymin=0, ymax=1.0,
-  xlabel={Game tick}, ylabel={$P(\text{goal}=\textit{production})$},
+  xlabel={Time in the session (game ticks)},
+  ylabel={Confidence the goal is a farm-type build},
   scaled x ticks=false, xticklabel style={/pgf/number format/fixed},
   grid=major, grid style={dotted, micagray!50},
 ]
@@ -241,17 +257,19 @@ embedding; only the coverage count is hand bookkeeping.}}
   at (axis cs:7050,0.12) {digression: builder wanders off\\ the farm; belief honestly follows};
 \end{axis}
 \end{tikzpicture}
-\caption{\textbf{Case study: tracking a real intention through evidence, absence,
-and digression.} A live session in which the builder made a crop farm
-(their own post-session label; goal category \textit{production}). The belief
-starts at chance because the live pipeline attached late and missed the first
-46 placements---yet recovers the correct goal from the remaining evidence,
-dips when the builder wanders mid-session (an honest response to
-contradicting evidence, not noise), and re-locks as the farm takes shape,
-peaking at $P=0.84$. Illustrative single-session view; quantitative claims
-rest on the pooled evaluations of Fig.~1.
-\textit{Evidence type: BOTH --- hand-specified filter dynamics carrying learned
-likelihoods over live observed evidence.}}
+\caption{\textbf{One real session, moment by moment: the system changing its
+mind as evidence arrives.} The builder was making a crop farm (their own
+label, given after the session). The line is the system's live confidence, at
+each moment, that ``farm-type build'' is the right answer. It starts at
+chance --- the system connected late and missed the first 46 placed blocks,
+so at that point it genuinely knew nothing. As evidence arrives, confidence
+climbs. Mid-session it \emph{drops}: the builder wandered away from the farm,
+and the system honestly followed the evidence away from the right answer
+rather than clinging to it. When building resumed, confidence re-locked and
+peaked at 0.84. One illustrative session --- the statistical claims live in
+Fig.~1, not here.
+\textit{Source: BOTH --- a hand-written update rule deciding how beliefs
+change, fed by learned judgments of what the evidence suggests.}}
 \end{figure}
 
 % ---------------------------------------------------------------- Figure 6
@@ -262,7 +280,7 @@ likelihoods over live observed evidence.}}
   width=0.5\textwidth, height=5.4cm,
   ybar, bar width=26pt,
   ymin=0, ymax=0.9, enlarge x limits=0.35,
-  ylabel={Token accuracy},
+  ylabel={Prediction accuracy},
   symbolic x coords={4 actions ahead, chance},
   xtick=data, x tick label style={font=\small},
   nodes near coords, nodes near coords style={font=\small},
@@ -271,14 +289,17 @@ likelihoods over live observed evidence.}}
   (4 actions ahead, 0.7433) (chance, 0.0115) };
 \end{axis}
 \end{tikzpicture}
-\caption{\textbf{Anticipation, not just recognition.} The multi-token decoder
-predicts the builder's action \emph{four steps ahead} with $74\%$ token
-accuracy on held-out sessions, against a token chance level of $1.2\%$
-(87-token vocabulary, $\tau$-matching: exact for symbolic tokens, $\pm2$ for
-coordinates). Understanding an intention here means correctly continuing the
-build several actions into the future.
-\textit{Evidence type: OBSERVATION --- the decoder is learned end to end; only
-the $\tau$-match metric is hand-defined.}}
+\caption{\textbf{Not just naming the goal --- predicting the moves.} Every
+builder action is written in a fixed vocabulary of 87 possible moves (walk,
+turn, place this block, break that one, \ldots). Here the model must predict
+the builder's action \emph{four moves into the future}, on sessions kept out
+of training. It is right 74\% of the time; blind guessing would be right
+1.2\% of the time (the small bar). ``Right'' means the exact move, with a
+small tolerance of $\pm2$ blocks on positions. Predicting several moves ahead
+is the practical test of understanding: it is what would let a helper prepare
+before being asked.
+\textit{Source: OBSERVATION --- the predictor is learned entirely from
+watching; only the definition of ``right'' is hand-written.}}
 \end{figure}
 
 \end{document}

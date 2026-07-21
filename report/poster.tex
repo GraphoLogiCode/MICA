@@ -60,9 +60,9 @@ In structured work --- construction, warehouses, assembly --- an assistant that
 must be \textbf{told everything is bottlenecked by the telling}. The scarce
 resource is the human's attention. An assistant that \emph{infers} what you are
 doing removes that bottleneck.\\[0.5em]
-Assistance-game research formalized this (CIRL, 2016) and proved goal inference
+Assistance-game research formalized this (CIRL~[1]) and proved goal inference
 is the load-bearing part: a \textbf{confidently wrong helper is worse than
-none} (Watch-And-Help: 40\% of episodes, the helper undid the human's work).\\[0.5em]
+none} (Watch-And-Help~[2]: 40\% of episodes, the helper undid the human's work).\\[0.5em]
 \textbf{The gap:} every prior assistant reads oracle game state.
 \textbf{Robots don't get oracle state.} MICA asks the question under robot
 conditions --- perception in, calibration measured, authority earned.
@@ -97,7 +97,7 @@ conditions --- perception in, calibration measured, authority earned.
 \end{tikzpicture}
 \end{center}
 \textbf{Trained}: likelihood heads + decoder (from my sessions).
-\textbf{Frozen}: every foundation encoder --- models built to make agents
+\textbf{Frozen}: every foundation encoder~[3] --- models built to make agents
 \emph{act} are read backwards, as \emph{evidence about a human}.
 \textbf{Hand-coded}: everything that must be inspectable (gate, consent, rules).
 \end{block}
@@ -287,6 +287,15 @@ regenerates every number on this poster from the raw recordings.
 \end{column}
 \end{columns}
 \end{beamercolorbox}
+
+\vspace{0.5em}
+{\small
+[1] Hadfield-Menell, Dragan, Abbeel, Russell. \emph{Cooperative Inverse
+Reinforcement Learning.} NeurIPS 2016. \quad
+[2] Puig et al. \emph{Watch-And-Help: A Challenge for Social Perception and
+Human-AI Collaboration.} ICLR 2021. \quad
+[3] Baker et al. \emph{Video PreTraining (VPT).} NeurIPS 2022; \;
+Fan et al. \emph{MineDojo (MineCLIP).} NeurIPS 2022.}
 
 \end{frame}
 \end{document}

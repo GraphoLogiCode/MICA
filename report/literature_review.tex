@@ -1,0 +1,297 @@
+% MICA — Literature Review (formal academic version)
+% Times New Roman 12pt via newtxtext/newtxmath. Compile: tectonic literature_review.tex
+\documentclass[12pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{newtxtext,newtxmath}
+\usepackage[hidelinks]{hyperref}
+\usepackage{setspace}
+\setstretch{1.15}
+
+\title{Literature Review:\\ Intention Recognition and Calibrated Assistance from Raw Observation}
+\author{Joosung Park\\ \small Multi-Campus REU 2026 $\cdot$ Penn State University $\cdot$ Computer Science}
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\noindent
+This review situates MICA (Minecraft Intention-Aware Collaborative Agent) within
+five research threads: assistance games, goal and intent recognition, Minecraft
+foundation models, structured action prediction, and confidence calibration.
+Although each thread supplies an essential ingredient, none combines explicit
+calibrated belief tracking with perception-based evidence under raw observation;
+consequently, that combination defines the gap this project addresses.
+
+\section{Assistance Under Hidden Goals}
+
+The formal foundation of this work is the assistance game. Hadfield-Menell et
+al.~\cite{cirl} formalized value alignment as Cooperative Inverse Reinforcement
+Learning (CIRL), a two-player cooperative game in which both agents are rewarded
+according to the human's objective, although only the human observes that
+objective. Because the robot must therefore infer the goal from behavior while
+simultaneously assisting, the authors prove that isolated optimality is
+suboptimal in this setting; thus, an effective assistant must manage its
+uncertainty rather than act on a point estimate. However, CIRL specifies the
+problem rather than a system.
+
+Puig et al.~\cite{wah} operationalized this framework as the Watch-And-Help
+benchmark, in which an agent first observes a human demonstration (Watch) and
+subsequently assists with the same goal in a novel environment (Help). Two
+findings from this benchmark directly motivate the present work. First, the cost
+of incorrect inference is negative rather than merely zero: a helper acting on a
+wrong goal repeatedly undid the human's work, and goal conflicts arose in 40\%
+of episodes. Second, the authors explicitly identify online goal inference---
+updating the estimate during assistance rather than fixing it after a single
+demonstration---as the principal open problem. Accordingly, NOPA~\cite{nopa}
+extended this line by maintaining a set of goal hypotheses that are updated
+online as the human acts, and by modulating assistance according to inference
+uncertainty. Most recently, AssistanceZero~\cite{assistancezero} scaled
+assistance games to collaborative Minecraft building---the same task family as
+MICA---using a Monte Carlo tree search policy whose goal inference is amortized
+into a neural prediction head.
+
+Collectively, this thread establishes the problem structure, the cost of
+erroneous inference, and the value of explicit uncertainty. Nevertheless, all of
+these systems share one simplification: the assistant reads privileged,
+ground-truth environment state, whether as symbolic scene graphs~\cite{wah,nopa}
+or as oracle game state~\cite{assistancezero}. Moreover, none of them evaluates
+whether the stated confidence of the inference is calibrated, and assistance is
+assessed by task outcome alone. In contrast, a physically embodied assistant
+receives only noisy, partial perception; therefore, it must additionally
+determine when its own inference should not be trusted.
+
+\section{Goal and Intent Recognition}
+
+Goal recognition constitutes an older and broader tradition. Classical plan
+recognition~\cite{grdsurvey,vered} infers goals by identifying the candidate
+whose optimal plan best explains the observed actions; however, its recognized
+weakness is that humans rarely behave optimally. Two responses to this weakness
+shaped MICA directly. First, GRAIL~\cite{grail} replaces planning with learning
+by training one goal-conditioned policy per candidate goal via imitation
+learning from potentially suboptimal demonstrations, so that scoring a partial
+trajectory requires only a single forward pass; MICA's learned likelihood heads
+follow the same principle, since they learn what pursuing each goal looks like
+from recorded sessions rather than assuming it. Second, Zhi-Xuan et
+al.~\cite{sips} model the human as a boundedly rational, resource-limited
+replanner within an online recursive Bayesian filter, and demonstrate that
+modeling the planning process---rather than merely action noise---is what makes
+goal posteriors accurate on suboptimal and backtracking trajectories.
+Consequently, their latent internal-process variable is the direct ancestor of
+MICA's reasoning-mode variable $z$, which distinguishes deliberate from habitual
+execution.
+
+In parallel, a robotics line based on partially observable Markov decision
+processes~\cite{apomdp,saborio,jain,gaze} established the pattern of a belief
+over human intent governing the degree of machine autonomy in shared-control
+settings. MICA's escalating authority ladder (observe, suggest, preview, place)
+renders this principle explicit as a safety gate.
+
+Finally, CLIPS~\cite{clips} resolves a design question that MICA's evaluation
+poses directly, namely where a large language model belongs within intent
+inference. In CLIPS, the language model serves exclusively as a likelihood term
+inside a Bayesian posterior and never as the decision-maker; notably, their
+direct-LLM baseline, in which GPT-4V names the goal outright, was the worst
+method evaluated, whereas the LLM embedded in the Bayesian frame performed best.
+MICA's four-arm comparison mirrors this contrast, since the LLM-reader arm
+(0.292) underperforms the learned Bayesian tracker (0.375) on never-seen
+sessions. Furthermore, CLIPS handles the assistant's own actions through a
+do-operator, and MICA pins the same rule: the agent's own placed blocks are
+never treated as evidence about the human.
+
+\section{Minecraft Foundation Models Read in Reverse}
+
+Minecraft became a viable research platform because two works equipped it with
+foundation models. MineDojo~\cite{minedojo} contributed an internet-scale
+knowledge base together with MineCLIP, a contrastive video--language model that
+scores how well recent video matches a natural-language task description.
+Meanwhile, VPT~\cite{vpt} trained a behavioral prior on approximately 70{,}000
+hours of YouTube gameplay, pseudo-labeled by an inverse dynamics model. An
+ecosystem of acting agents subsequently emerged: STEVE-1~\cite{steve1} follows
+text instructions by writing commands into MineCLIP's latent space, multi-agent
+benchmarks~\cite{teamcraft,villageragent,mbag} coordinate several builders, and
+BEDD~\cite{bedd} benchmarks fuzzy, human-judged tasks.
+
+MICA's relationship to this ecosystem is an inversion. Whereas each of these
+models was constructed to make an agent act, MICA executes the direction in
+reverse: VPT's trunk serves as a frozen behavior encoder that summarizes what
+the human is doing, and where STEVE-1 writes a command into MineCLIP's goal
+space to produce behavior, MICA reads from the same space by scoring observed
+behavior against each candidate goal expressed as text. No backbone is
+fine-tuned; instead, only lightweight task-specific heads are trained on the
+project's own recorded sessions, because the dataset of 37 real building
+sessions is far too small to train models of this scale without memorization.
+The same pattern extends to three dimensions, since Uni3D~\cite{uni3d}, a
+pretrained point-cloud encoder, reads the reconstructed structure as a single
+shape vector, following the structured-3D regime established by works such as
+SpatialLM~\cite{spatiallm}.
+
+\section{Structured Action Prediction}
+
+MICA's anticipation result depends on treating builder actions as a small formal
+language of 87 tokens---five action verbs together with coordinate and
+block-type arguments---and on training a decoder to predict what follows. Two
+works license this architecture. FastSceneScript~\cite{fastscenescript}
+demonstrates that structured scenes can be decoded as token sequences using
+multi-token prediction with confidence-guided decoding, which is the same
+structured-language framing MICA applies to building actions. Moreover, Gloeckle
+et al.~\cite{mtp} provide the peer-reviewed basis for the decoder's multi-token
+form by showing that predicting $K$ future tokens through parallel heads on a
+shared trunk is both viable and beneficial. Their appendix also reports that
+attaching a multi-token loss to a next-token-pretrained model at fine-tuning
+time failed; consequently, MICA's staged training recipe, which performs
+next-token pretraining on real sessions before the multi-token stage, was
+designed to respect rather than ignore this negative result.
+
+\section{Confidence Calibration}
+
+The final thread is the source of this project's principal negative finding.
+Guo et al.~\cite{guo} demonstrated that modern neural networks are
+systematically overconfident, in that their stated probabilities exceed their
+actual accuracies, and they standardized the measurement protocol of reliability
+diagrams and expected calibration error (ECE). MICA adopted this protocol as a
+pre-registered evaluation of its own belief, and the predicted failure was
+confirmed: above a stated confidence of 0.4, held-out reliability inverts.
+Therefore, the confidence-licensed placement route is disabled by its own
+threshold, which constitutes the project's central safety mechanism. Notably,
+prior assistance systems~\cite{wah,nopa,assistancezero} never performed this
+audit; in contrast, MICA treats calibration as a gate that operational authority
+must pass before any autonomous action is permitted.
+
+\section{Positioning}
+
+In summary, each neighboring line of work omits precisely one element that MICA
+supplies. The assistance-game lineage~\cite{cirl,wah,nopa,assistancezero}
+establishes the problem yet reads oracle state and never audits calibration; the
+goal-recognition lineage~\cite{grail,sips,clips} contributes learned
+likelihoods, bounded rationality, and Bayesian discipline, yet operates in
+symbolic domains without perception; the Minecraft foundation
+models~\cite{vpt,minedojo,steve1} supply powerful representations, yet were
+built for control rather than interpretation; and calibration
+research~\cite{guo} defines the measurement, yet has not been applied to an
+assistant's license to act. MICA therefore occupies the intersection: an
+explicit, recursive Bayesian belief over goal and reasoning
+mode~\cite{sips,clips}, whose likelihoods are learned from
+recordings~\cite{grail}, over evidence produced by frozen foundation encoders
+run in reverse~\cite{vpt,minedojo,uni3d}, in the same task family as scaled
+assistance games~\cite{assistancezero}---together with the discipline none of
+these systems carried: the belief's confidence is calibration-audited, and the
+agent's authority to act is gated on passing that audit, which it has not yet
+passed. The literature thus supplies every ingredient; the contribution is
+their combination under robot-like observational conditions, evaluated by
+pre-registered criteria, with failures reported alongside successes.
+
+\begin{thebibliography}{99}
+\setlength{\itemsep}{2pt}
+
+\bibitem{cirl} D. Hadfield-Menell, A. Dragan, P. Abbeel, and S. Russell,
+``Cooperative inverse reinforcement learning,'' in \emph{Advances in Neural
+Information Processing Systems (NeurIPS)}, 2016.
+
+\bibitem{wah} X. Puig, T. Shu, S. Li, Z. Wang, Y.-H. Liao, J. B. Tenenbaum,
+S. Fidler, and A. Torralba, ``Watch-And-Help: A challenge for social perception
+and human-AI collaboration,'' in \emph{International Conference on Learning
+Representations (ICLR)}, 2021.
+
+\bibitem{nopa} X. Puig, T. Shu, J. B. Tenenbaum, and A. Torralba, ``NOPA:
+Neurally-guided online probabilistic assistance for building socially
+intelligent home assistants,'' in \emph{IEEE International Conference on
+Robotics and Automation (ICRA)}, 2023.
+
+\bibitem{assistancezero} C. Laidlaw, E. Bronstein, T. Guo, D. Feng,
+L. Berglund, J. Svegliato, S. Russell, and A. Dragan, ``AssistanceZero:
+Scalably solving assistance games,'' in \emph{International Conference on
+Machine Learning (ICML)}, 2025.
+
+\bibitem{grdsurvey} S. Keren, A. Gal, and E. Karpas, ``Goal recognition
+design -- survey,'' in \emph{International Joint Conference on Artificial
+Intelligence (IJCAI), Survey Track}, 2020.
+
+\bibitem{vered} M. Vered and G. A. Kaminka, ``Heuristic online goal recognition
+in continuous domains,'' in \emph{International Joint Conference on Artificial
+Intelligence (IJCAI)}, 2017.
+
+\bibitem{grail} O. Elhadad, F. Meneguzzi, and R. Mirsky, ``GRAIL: Goal
+recognition alignment through imitation learning,'' in \emph{International
+Conference on Autonomous Agents and Multiagent Systems (AAMAS)}, 2026.
+
+\bibitem{sips} T. Zhi-Xuan, J. L. Mann, T. Silver, J. B. Tenenbaum, and
+V. K. Mansinghka, ``Online Bayesian goal inference for boundedly rational
+planning agents,'' in \emph{Advances in Neural Information Processing Systems
+(NeurIPS)}, 2020.
+
+\bibitem{apomdp} C.-P. Lam and S. S. Sastry, ``A POMDP framework for
+human-in-the-loop system,'' in \emph{IEEE Conference on Decision and Control
+(CDC)}, 2014.
+
+\bibitem{saborio} J. C. Saborio and J. Hertzberg, ``Planning with intention
+recognition in partially observable domains,'' arXiv preprint, 2024.
+
+\bibitem{jain} S. Jain and B. Argall, ``Probabilistic human intent recognition
+for shared autonomy in assistive robotics,'' \emph{ACM Transactions on
+Human-Robot Interaction}, 2019.
+
+\bibitem{gaze} V. Belcamino, M. Takase, M. Kilina, A. Carf\`i, A. Shimada,
+S. Shimizu, and F. Mastrogiovanni, ``Gaze-based intention recognition for
+human-robot collaboration,'' in \emph{ACM/IEEE International Conference on
+Human-Robot Interaction (HRI)}, 2024.
+
+\bibitem{clips} T. Zhi-Xuan, L. Ying, V. Mansinghka, and J. B. Tenenbaum,
+``Pragmatic instruction following and goal assistance via cooperative
+language-guided inverse planning,'' in \emph{International Conference on
+Autonomous Agents and Multiagent Systems (AAMAS)}, 2024.
+
+\bibitem{minedojo} L. Fan, G. Wang, Y. Jiang, A. Mandlekar, Y. Yang, H. Zhu,
+A. Tang, D.-A. Huang, Y. Zhu, and A. Anandkumar, ``MineDojo: Building
+open-ended embodied agents with internet-scale knowledge,'' in \emph{Advances
+in Neural Information Processing Systems (NeurIPS)}, 2022.
+
+\bibitem{vpt} B. Baker, I. Akkaya, P. Zhokhov, J. Huizinga, J. Tang,
+A. Ecoffet, B. Houghton, R. Sampedro, and J. Clune, ``Video PreTraining (VPT):
+Learning to act by watching unlabeled online videos,'' in \emph{Advances in
+Neural Information Processing Systems (NeurIPS)}, 2022.
+
+\bibitem{steve1} S. Lifshitz, K. Paster, H. Chan, J. Ba, and S. McIlraith,
+``STEVE-1: A generative model for text-to-behavior in Minecraft,'' in
+\emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2023.
+
+\bibitem{teamcraft} Q. Long, Z. Li, R. Gong, Y. N. Wu, D. Terzopoulos, and
+X. Gao, ``TeamCraft: A benchmark for multi-modal multi-agent Minecraft,'' in
+\emph{Advances in Neural Information Processing Systems (NeurIPS)}, 2024.
+
+\bibitem{villageragent} Y. Dong, X. Zhu, Z. Pan, L. Zhu, and Y. Yang,
+``VillagerAgent: A graph-based multi-agent framework for coordinating dependent
+tasks in Minecraft,'' in \emph{Annual Meeting of the Association for
+Computational Linguistics (ACL)}, 2024.
+
+\bibitem{mbag} J. Lee, ``Minecraft building assist game,'' in \emph{IEEE
+International Conference on Big Data}, 2022.
+
+\bibitem{bedd} S. Milani, A. Kanervisto, K. Ramanauskas, S. Schulhoff,
+B. Houghton, and R. Shah, ``BEDD: The MineRL BASALT evaluation and
+demonstrations dataset,'' in \emph{Advances in Neural Information Processing
+Systems (NeurIPS), Datasets and Benchmarks Track}, 2023.
+
+\bibitem{uni3d} J. Zhou, J. Wang, B. Ma, Y.-S. Liu, T. Huang, and X. Wang,
+``Uni3D: Exploring unified 3D representation at scale,'' in \emph{International
+Conference on Learning Representations (ICLR)}, 2024.
+
+\bibitem{spatiallm} Y. Mao, J. Zhong, C. Fang, J. Zheng, R. Tang, H. Zhu,
+P. Tan, and Z. Zhou, ``SpatialLM: Large language models for structured indoor
+scene understanding,'' in \emph{IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR)}, 2024.
+
+\bibitem{fastscenescript} R. Yin, X. Shi, O. Bailo, M. Manfredi, and
+T. Gevers, ``FastSceneScript: Accelerating structured scene generation via
+multi-token prediction,'' arXiv preprint arXiv:2512.05597, 2025.
+
+\bibitem{mtp} F. Gloeckle, B. Y. Idrissi, B. Rozi\`ere, D. Lopez-Paz, and
+G. Synnaeve, ``Better \& faster large language models via multi-token
+prediction,'' in \emph{International Conference on Machine Learning (ICML)},
+2024.
+
+\bibitem{guo} C. Guo, G. Pleiss, Y. Sun, and K. Q. Weinberger, ``On
+calibration of modern neural networks,'' in \emph{International Conference on
+Machine Learning (ICML)}, 2017.
+
+\end{thebibliography}
+\end{document}

@@ -58,3 +58,7 @@ capture/youtube/
 # and labels staged in the tool but not yet applied).
 after_session_tool/skipped.json
 after_session_tool/staged_labels.json
+
+# Report build scratch — downloaded tectonic toolchain (~68MB of binaries),
+# build logs, and preview renders; all regenerable, none are source.
+report/
